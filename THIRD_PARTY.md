@@ -482,6 +482,63 @@ Direct resvg 0.48.0 (text, system-fonts, raster-images; defaults disabled), reex
 | usvg | 0.48.1 | Apache-2.0 OR MIT | https://crates.io/crates/usvg/0.48.1 |
 | xmlwriter | 0.1.0 | MIT | https://crates.io/crates/xmlwriter/0.1.0 |
 
+## Native AVIF release provenance and notices
+
+The macOS payload builds **unmodified libavif 1.4.2 upstream source with only
+the dav1d backend**, and copies installed Homebrew dav1d 1.5.4. Source is never
+patched or committed. `AVIF_LIBYUV=OFF` means no external libyuv dependency;
+upstream's CMake still compiles its own five-file embedded scaling subset.
+There is therefore libyuv-derived code inside libavif, licensed BSD-3-Clause,
+not a third shipping dylib. Glance's YUV conversion continues to request
+`avoidLibYUV`; that does not remove upstream's scaling sources.
+
+Exact source/provenance SHA-256 values:
+
+- libavif 1.4.2 archive:
+  https://github.com/AOMediaCodec/libavif/archive/refs/tags/v1.4.2.tar.gz
+  `2b645287340ba5a631d268b551dc2d72bd73ac33335962dd36dcdb6d8366921d`
+  (verified by the build script before extraction).
+- dav1d 1.5.4 source, as recorded by the installed Homebrew SPDX SBOM:
+  https://code.videolan.org/videolan/dav1d/-/archive/1.5.4/dav1d-1.5.4.tar.bz2
+  `2abfb0c89212e6e4733a54e0ae509ec00a5b845a6360946f918806e14aedb011`.
+  Installed bottle SHA-256 in that SBOM:
+  `d30ff747564febd643ec4b279c5adc74f708b8d6eb8e172f914b9fcdec26c464`.
+  Measured arm64 input `libdav1d.7.dylib` SHA-256 before relocation:
+  `60c3a42a79582241ac77bbbba4c0137c2209204aecbc59e5d6392c2dc0a5b439`.
+  The script checks the installed version, copies receipts/SBOM and records
+  input/payload hashes; it does not fetch or verify the dav1d source archive.
+- Embedded subset: the exact revision included in the pinned libavif 1.4.2
+  archive (no independently selected external libyuv release). Under
+  `third_party/libyuv/source/`, SHA-256 by file:
+
+```text
+planar_functions.c ab2ca7fefc0db313691eda8e8cc4c25ffefa80f0bf855286f7d2335c1673c3f9
+row_common.c       4d0865100908598d5767eeafd8fc16c10f50c7960131dfe230dbaa0aaf0cbd2e
+scale_any.c        f1ffd34bff19784e08721d1267466e9764232b6836aef52be2d9b28e3384d0a6
+scale_common.c     1c4551062504bd15170e9d93b1fd22cb61b1b7d5af16a6f0baec38db7bb90b0c
+scale.c            7839fe2ceadcfe6a45e7014a499c8e6832b896a0ab2426ea0f9f03e1f2fdba20
+```
+
+Redistribute the stage's **entire** `Contents/Resources/licenses/native/`
+with the decoder libraries:
+
+- `libavif-1.4.2-LICENSE`: BSD-2-Clause core, Copyright 2019 Joe Drago;
+  `src/obu.c`, Copyright 2018–2019 VideoLAN and dav1d authors; and the
+  embedded subset's BSD-3-Clause, Copyright 2011 The LibYuv Project Authors.
+  It preserves all copyright, conditions and disclaimers, including the
+  Google/contributor non-endorsement clause. The complete upstream file also
+  retains notices for unbuilt IJG/contrib/Android components; their presence
+  does not mean those components are linked.
+- `dav1d-1.5.4-COPYING`: upstream BSD-2-Clause conditions/disclaimer and
+  VideoLAN/dav1d authors / Two Orioles, LLC copyright notices.
+- Embedded `AUTHORS` and source hashes, plus the installed Homebrew receipts,
+  SPDX SBOMs and libavif Homebrew LICENSE as additional provenance. The
+  Homebrew libavif binary is **not** the shipped libavif.
+
+Only native notices are collected by this target; the final app still needs
+Glance's MIT notice and all Rust/font distribution notices described above.
+The `.app`/DMG/archive builder must retain these files when consuming the stage.
+
 ## Native AVIF development adapter
 
 Validated exact pkg-config versions: libavif 1.4.2 and dav1d 1.5.4 (Homebrew,
@@ -502,11 +559,12 @@ also records optional IJG, contrib and Android build-tool notices; applicability
 must be determined from the actual packaged artifact, not this manifest.
 
 The development dylib links libaom and therefore libvmaf in addition to dav1d.
-This graph is NOT approved for shipping. Packaging must build/pin decoder-only
-libavif+dav1d with encoders, libyuv, libvmaf and libheif absent and gather the
-full native notice bundle. This work does not ship those Homebrew libraries.
-The decoder is native in-process code; Rust unwind containment is not native
-fault containment. No distribution clearance or Linux certification is claimed.
+This graph is NOT approved for shipping. `make bundle-avif` instead builds
+unmodified upstream libavif with dav1d only, without external libyuv, encoders,
+libvmaf or libheif; it ships only libavif and dav1d dylibs. Upstream's embedded
+scaling subset remains, as disclosed below. The decoder is native in-process
+code; Rust unwind containment is not native fault containment. Linux release
+bundling is not implemented or certified.
 
 Original alpha.png is an independently generated 5×3 16-bit RGBA constant RGB
 (32768,16384,8192), with a five-step alpha ramp. alpha8/10/12.avif were encoded

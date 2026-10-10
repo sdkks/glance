@@ -437,9 +437,10 @@ sudo apt install pkg-config libavif-dev libdav1d-dev
 
 Validated development versions: Homebrew libavif 1.4.2 + dav1d 1.5.4, macOS
 arm64. The Homebrew libavif dylib also links aom/libvmaf: **this is not the shipping
-artifact**. Release packaging must provide/pin a decoder-only libavif+dav1d build,
-without encoders, libyuv, libvmaf or libheif, and collect exact native notices.
-This increment does not provision that artifact. Linux remains unverified.
+artifact**. The release payload below replaces it with unmodified upstream
+libavif built with dav1d only; it excludes external libyuv, encoders, libvmaf and
+libheif, but retains upstream's embedded BSD-3-Clause scaling subset.
+Linux release bundling remains unimplemented.
 The three original analytic alpha fixtures are generated from `alpha.png` with
 avifenc 1.4.2, lossless, 4:4:4 identity matrix, depths 8/10/12; encoder tools are
 fixture-generation tools only, never linked by Glance's adapter.
@@ -449,6 +450,81 @@ EXIF orientation (5×3 → 2×6). PQ, HLG and two-frame sequence fixtures exerci
 remaining named rejections. All derive from the same original `alpha.png`; see
 `assets/test/web/README.md` for exact generation commands. The external hato
 conformance sample is used read-only for local smoke, not redistributed.
+
+## Native AVIF release payload (macOS)
+
+```sh
+# In addition to the pinned Rust toolchain and Apple command-line tools:
+brew install cmake pkg-config libavif dav1d
+make bundle-avif
+# For a subsequent run, use a new, nonexistent staging directory:
+make bundle-avif AVIF_STAGE=build/avif-release-2
+```
+
+The script requires installed libavif 1.4.2 (development probe) and dav1d 1.5.4.
+It downloads the checksum-pinned libavif 1.4.2 source, builds it unmodified with
+only the dav1d backend, and copies the installed dav1d decoder. No external
+libyuv, AOM, encoder, libvmaf or libheif library is shipped. Upstream's own five
+embedded libyuv scaling source files are still compiled with `AVIF_LIBYUV=OFF`;
+their BSD-3-Clause notice is in the copied upstream LICENSE. See `THIRD_PARTY.md`
+for exact source hashes and provenance. Versions are checked, not upgraded.
+
+The stage must not already exist: reruns fail rather than overwrite caller
+files. `AVIF_STAGE` may be relative to the repository or absolute. A failed run
+leaves its stage for diagnosis; choose another stage to retry. Downloads, native
+builds and evidence under `build/` are ignored, never committed. The stage is
+not a finished `.app` or signed/notarized distribution. Its contract is:
+
+- `Contents/MacOS/glance`: release executable linked to the bundled libavif.
+- `Contents/Frameworks/{libavif.16,libdav1d.7}.dylib`: only these two native
+  decoder libraries; install names use executable/loader-relative paths.
+- `Contents/Resources/licenses/native/`: complete upstream libavif LICENSE
+  (including the embedded scaling notice), dav1d COPYING, embedded authors/source
+  hashes, and Homebrew provenance receipts/SBOMs.
+- Evidence beside `Contents/`: `before.txt`, `after.txt`, `smoke.txt`, `dyld.txt`,
+  `sizes.txt`, `versions.txt`, input/payload SHA-256 files and `native-avif.zip`.
+  `native-build/` and this evidence are not app contents.
+
+Copy **all three Contents subdirectories**, preserving their relative locations,
+into the final macOS app before final signing and archiving. The script ad-hoc
+re-signs rewritten Mach-O files; that is not Developer ID signing/notarization.
+It audits the full dylib closure, rejecting unexpected non-system dependencies,
+and traces a real packaged-binary AVIF decode with empty dyld library/fallback
+paths and injected/alternate framework paths cleared. A trace that loads any
+Homebrew path fails. This is relocation evidence, not a test on a clean OS install.
+
+Measured macOS arm64 payload: libavif **269,488 B**, dav1d **843,344 B**,
+combined **1,112,832 B**; dylibs plus native notices zipped ≈**473 KB**.
+Including executable relocation/re-signing, the previously measured executable
+plus dylib delta was ≈**+1.0 MB**. The native compressed increment is far under
+the **40 MB compressed-DMG budget**, not gigantic; a complete DMG still needs
+its own final measurement (ZIP is not DMG compression).
+
+### Packaging/CI decoder smoke diagnostic
+
+`GLANCE_SMOKE_IMAGE=1` decodes the first CLI image path with the real bounded
+loader, prints `decoded WIDTHxHEIGHT`, and exits without opening a window. A
+missing path or decoding error prints a diagnostic and exits with status 1.
+Other values or an unset variable retain the unchanged normal viewer startup.
+This is an opt-in packaging/CI smoke aid, not a separate decoder or GUI test:
+
+```sh
+GLANCE_SMOKE_IMAGE=1 build/bundle-libs/Contents/MacOS/glance assets/test/web/alpha8.avif
+# Expected: decoded 5x3
+```
+
+### Linux packaging follow-up
+
+`make bundle-avif` currently fails explicitly on Linux before creating a stage.
+Linux release packaging must implement and validate an x86_64 counterpart: build
+unmodified pinned libavif with dav1d only (same embedded scaling disclosure),
+bundle libavif/dav1d `.so` files plus their complete notices, and use `$ORIGIN`
+relative RUNPATHs for the executable **and** its transitive decoder dependency.
+Audit the closure against system libraries, prohibit encoder/external-libyuv/
+libvmaf/libheif dependencies, and run the real AVIF smoke with package-manager
+codec paths unavailable. Translate the macOS stage contract to the chosen Linux
+archive layout; do not ship this macOS payload or silently use system codecs.
+That path and Linux measurements are outstanding, not claimed working here.
 
 ## Current limits and remaining work
 
@@ -561,6 +637,7 @@ smoke-tested on macOS arm64, not certified on Linux.
 | `uninstall-hooks` | Clear local `core.hooksPath` only when exactly one value equals `.githooks` |
 | `precommit` | `git diff --cached --check`, then working-tree fmt-check and check |
 | `build` | `cargo build --release --locked` |
+| `bundle-avif` | Stage macOS decoder-only AVIF payload; `AVIF_STAGE` selects a new directory |
 | `run` | `cargo run --locked -- $(ARGS)` |
 
 Diagnostics and failing exit statuses are not filtered. Checks do not format,
