@@ -1,8 +1,8 @@
 # glance
 
 An independently authored MIT desktop image viewer, built with Rust and
-eframe/egui's wgpu renderer. This first increment opens **JPEG (`jpg`, `jpeg`)
-and PNG/TIFF** (primary TIFF image); it is not yet the complete planned viewer.
+eframe/egui's wgpu renderer. Opens the raster and icon formats listed below;
+it is not yet the complete planned viewer.
 
 ```sh
 make run ARGS='/absolute/path/to/image.png'
@@ -99,8 +99,8 @@ One in-flight decode/result per worker, encoded input, decoder/conversion scratc
 GPU staging and clipboard copies are **additional bounded/transient allocations**,
 not included in the resident cache budget and not a process-RSS guarantee. A
 running synchronous prefetch codec may finish after cancellation; its stale
-result is discarded, never admitted. No neighboring animation runs; this version
-still only dispatches JPEG and static PNG/TIFF.
+result is discarded, never admitted. No neighboring animation runs; GIF/WebP
+and PNG/TIFF are decoded as static previews.
 
 Before navigation/sort, the foreground worker rescans and checks path, size,
 modification time and Unix device/inode/change time. Removed or changed entries
@@ -176,9 +176,11 @@ native file-reference round trips, Finder selection, and transform/input feel.
 Embedded ordinary RGB ICC matrix and LUT profiles are converted to sRGB by pinned
 moxcms 0.8.1, using relative-colorimetric intent and explicit gamut clipping.
 Untagged RGB is treated as sRGB. Metadata is read before consuming the decoder.
-JPEG and PNG provide ICC; TIFF provides ICC and orientation; PNG has EXIF-based
-orientation via the decoder trait default. WebP has both metadata methods in the
-pinned source but is not dispatched in this increment. The title discloses
+JPEG, PNG, GIF and WebP provide ICC where present; TIFF provides ICC and
+orientation; PNG has EXIF-based orientation via the decoder trait default.
+WebP ICC and EXIF orientation pass through the same normalization seam. The other
+new decoders do not expose embedded ICC/EXIF through their decoder traits (including
+nested PNG in ICO/CUR/ICNS); those previews assume sRGB. The title discloses
 `ICC fallback: unsupported/invalid profile; assuming sRGB` when parsing/conversion
 fails or a profile exceeds our 4 MiB profile/CLUT caps. Alpha bypasses the CMS.
 Failed conversions retain original samples, never a partially converted image.
@@ -210,6 +212,48 @@ remain PQ absolute luminance divided by 203 cd/m² reference white, and HLG fixe
 BT.2100 1000-cd/m² display/system gamma 1.2, without per-frame exposure; these are
 not verified current behavior. Human visual ICC/photo/alpha checks and Linux
 validation remain outstanding.
+
+## Raster and icon formats
+
+Extensions are case-insensitive; the same dispatch map controls folder eligibility.
+Content must match its extension. A supported extension is not a promise to decode
+every historical variant. Codec failures show `Could not decode image`,
+`Could not read file`, `Unsupported image variant`, or the resource-limit error;
+the previous displayed image and navigation remain available.
+
+| Format / extensions | Ordinary preview and boundaries | Source depth / metadata |
+| --- | --- | --- |
+| JPEG: `jpg`, `jpeg` | Baseline/progressive; approximate CMYK/YCCK preview | U8; ICC |
+| PNG: `png` | Static default image, not APNG playback | U8/U16; ICC and EXIF orientation |
+| TIFF: `tif`, `tiff` | Primary image; float preview described above | U8/U16/float; ICC and orientation |
+| BMP: `bmp` | Codec-supported palettes, RGB/bitfields and RLE; not all DIB variants | U8 output, including packed 16-bit RGB (not 16 bits/channel); no exposed ICC |
+| ICO: `ico` | PNG/DIB entries; upstream selects highest declared bit depth, then largest area; ties choose last directory entry | U8; nested profiles not exposed |
+| CUR: `cur` | Validated cursor directory; largest area, first entry on ties; PNG/DIB payload wrapped as a single ICO. Zero size fields mean 256. Hotspots are ignored for static display, not mistaken for ICO bit depth | U8; nested profiles not exposed |
+| ICNS: `icns` | Largest icon by upstream size/depth score; legacy data and PNG supported; JPEG2000 subimages give a named unsupported-variant error (no JP2 codec) | U8, including downconverted 16-bit nested PNG; nested profiles not exposed |
+| TGA: `tga` | Raw/RLE grayscale, palette and RGB where supported; descriptor origin normalized by codec (top/bottom and left/right); no TGA 2.0 color-management integration | U8 output; packed 16-bit pixels are not 16 bits/channel |
+| PNM: `pnm`, `pbm`, `pgm`, `ppm`, `pam` | PBM/PGM/PPM ASCII or binary, ordinary PAM tuples; unsupported tuple/depth combinations are named errors | U8/U16 where provided; no ICC; PFM not dispatched |
+| WBMP: `wbmp` | Type 0 monochrome; other types/extended headers named unsupported variants | Expanded U8; no ICC |
+| XBM: `xbm` | C bitmap text, LSB-first black bits; hotspots irrelevant to static preview | Expanded U8; no ICC |
+| XPM: `xpm` | XPM text and named/hex colors supported by decoder; transparency; unsupported syntax/color variants fail by name | U16 RGBA even for ordinary 8-bit colors; no ICC |
+| PCX: `pcx` | Codec-supported paletted and planar RGB variants; no claim of every vintage PCX layout | U8 RGB; no ICC |
+| SGI: `sgi`, `bw`, `rgb`, `rgba` | Raw/RLE ordinary 1–4-channel images; unsupported colormap/storage variants are named errors | U8/U16; no ICC |
+| GIF: `gif` | First composited canvas frame only; animated files open without playback | U8; ICC when exposed |
+| WebP: `webp` | Lossy/lossless; animated files open first composited frame, no playback | U8; ICC and EXIF orientation |
+
+New formats reuse the existing U8/U16 normalization, rendering levels and clipboard
+path; no extra HDR or high-depth fidelity guarantee is added. PNM, SGI and XPM
+16-bit samples are retained when the decoder exposes them. The tests exercise
+ordinary independently generated examples, not an exhaustive variant corpus.
+
+Extra codecs come from pinned `image-extras` 0.1.1, **only** features
+`icns`, `wbmp`, `xbm`, `xpm`, `pcx`, `sgi`, with defaults disabled. Its README
+explicitly says fuzzing is not a priority and malformed input may "panic or worse";
+it discourages fuzz-crash reports except memory-safety violations. These decoders
+are not hardened or sandboxed. Glance contains Rust unwinding across decoder
+construction, metadata and pixel decode and returns a named malformed-image error.
+The default panic hook may still print a diagnostic. This boundary does not catch
+allocator aborts, process aborts or memory-safety failures. Encoded reads and output
+sizes remain bounded; upstream scratch-allocation limits remain best-effort.
 
 ## Current limits and remaining work
 
@@ -445,7 +489,9 @@ Glance is MIT; see `LICENSE`. Direct dependencies are pinned to eframe 0.36.2
 (MIT OR Apache-2.0), image 0.25.10 (MIT OR Apache-2.0), rfd 0.17.2 (MIT), arboard
 3.6.1 (MIT OR Apache-2.0), and the macOS-only objc2 0.6.5 (MIT), objc2-app-kit 0.3.2
 (Zlib OR Apache-2.0 OR MIT), and objc2-foundation 0.3.2 (MIT).
-The viewer directly enables image's JPEG/PNG/TIFF codecs. Color conversion uses
+The viewer directly enables image's JPEG/PNG/TIFF/BMP/ICO/TGA/PNM/GIF/WebP codecs
+with defaults disabled, plus image-extras 0.1.1 (MIT OR Apache-2.0) with the selective
+features listed above. Color conversion uses
 moxcms 0.8.1 (BSD-3-Clause OR Apache-2.0); RGBA16F packing uses half 2.7.1
 (MIT OR Apache-2.0), promoted from the existing resolved graph. Settings parsing
 uses toml_edit 0.25.17 (MIT OR Apache-2.0), also promoted without new resolved
