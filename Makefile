@@ -1,7 +1,7 @@
 .DEFAULT_GOAL := help
 .PHONY: help bundle-avif fmt fmt-check check clippy test verify precommit build run icons install-hooks uninstall-hooks version bump-version release
 
-help:
+help: help-linux
 	@printf '%s\n' 'Glance development commands:' '  fmt        Format Rust (modifies files)' '  fmt-check  Check formatting' '  check      Compile all targets without building executables' '  clippy     Lint all targets, warnings are errors' '  test       Run tests' '  verify     Sequential fmt-check, check, clippy, test' '  precommit  Staged whitespace, working-tree fmt-check and check' '  build      Build the release executable' '  bundle-avif Stage macOS decoder-only native AVIF (AVIF_STAGE=new/path)' '  macos-artifacts  Package .app, zip and DMG (macOS tools)' '  dmg        Alias for macos-artifacts' '  macos-smoke  Mount/launch smoke for produced artifacts (IMAGE=path)' '  run        Run the viewer (ARGS="path/to/image.png")' '  audit      Check dependency licenses, advisories, bans, sources (non-mutating)' '  machete    Check for unused direct dependencies (non-mutating)' '  icons      Regenerate macOS and Linux icons from committed masters (macOS tools)' '  install-hooks    Opt in to tracked pre-commit checks (refuses hooksPath conflicts)' '  uninstall-hooks  Remove only our local tracked-hook activation' '  version    Print the package version' '  bump-version  Bump and stamp notes (BUMP=major|minor|patch or VERSION=x.y.z)' '  release    Bump, commit and tag locally (BUMP/VERSION; never pushes)'
 
 install-hooks:
@@ -74,3 +74,17 @@ macos-smoke:
 .PHONY: notices
 notices:
 	python3 scripts/generate-notices.py $(NOTICES_ARGS)
+# Linux source-prefix installation (independent of artifact packaging).
+PREFIX ?= $(HOME)/.local
+DESTDIR ?=
+DRY_RUN ?= 0
+SUDO ?= 0
+.PHONY: install-linux uninstall-linux help-linux
+help-linux:
+	@printf '%s\n' '  install-linux    Build/install into PREFIX (default ~/.local; DRY_RUN=1 previews)' '  uninstall-linux  Remove unchanged manifest-owned files from PREFIX'
+
+install-linux:
+	@sh scripts/install-linux.sh install "$(PREFIX)" "$(DESTDIR)" "$(DRY_RUN)" "$(SUDO)"
+
+uninstall-linux:
+	@sh scripts/install-linux.sh uninstall "$(PREFIX)" "$(DESTDIR)" "$(DRY_RUN)" "$(SUDO)"
