@@ -111,6 +111,8 @@ enum Command {
 }
 
 pub struct Viewer {
+    uploads: Arc<std::sync::Mutex<crate::render::Uploads>>,
+    staging_frame: u64,
     pending_image: Option<(u64, Option<FileVersion>, Arc<Image>)>,
     last_paint: Option<egui::PaintCallback>,
     prefetch: Option<Loader>,
@@ -155,6 +157,8 @@ impl Viewer {
             ),
         };
         let mut viewer = Self {
+            uploads: crate::render::Uploads::new(cc.wgpu_render_state.as_ref()),
+            staging_frame: 0,
             pending_image: None,
             last_paint: None,
             prefetch,
@@ -302,7 +306,10 @@ impl Viewer {
         self.render_state
             .as_ref()
             .ok_or_else(|| "GPU renderer unavailable".to_owned())
-            .and_then(|state| Image::upload(state, pixels).map_err(|error| error.to_string()))
+            .and_then(|state| {
+                Image::upload(state, pixels, Arc::clone(&self.uploads))
+                    .map_err(|error| error.to_string())
+            })
     }
 
     fn commit_ready(
@@ -700,6 +707,7 @@ impl eframe::App for Viewer {
                 self.action_error = None;
             }
         }
+        self.staging_frame = self.staging_frame.wrapping_add(1);
         egui::CentralPanel::default()
             .frame(egui::Frame::central_panel(ui.style()).fill(Color32::from_gray(18)))
             .show(ui, |ui| {
@@ -731,13 +739,18 @@ impl eframe::App for Viewer {
                                     candidate_view.rect(canvas, size, ppp),
                                     candidate_view.transform,
                                     candidate_view.scale(canvas, size, ppp),
+                                    self.staging_frame,
                                 )
                                 .map_err(|e| e.to_string())
                         });
                     match prepared {
-                        Ok(paint) => {
+                        Ok(Some(paint)) => {
                             self.commit_ready(generation, version, image, paint.coverage);
                             self.last_paint = Some(paint.paint);
+                        }
+                        Ok(None) => {
+                            self.pending_image = Some((generation, version, image));
+                            ctx.request_repaint();
                         }
                         Err(error) => self.display.fail(error),
                     }
@@ -808,8 +821,10 @@ impl eframe::App for Viewer {
                             self.view.rect(canvas, size, ppp),
                             self.view.transform,
                             self.view.scale(canvas, size, ppp),
+                            self.staging_frame,
                         ) {
-                            Ok(paint) => self.last_paint = Some(paint.paint),
+                            Ok(Some(paint)) => self.last_paint = Some(paint.paint),
+                            Ok(None) => ctx.request_repaint(),
                             Err(error) => self.action_error = Some(error.to_string()),
                         }
                         if let Some(paint) = &self.last_paint {
@@ -938,6 +953,77 @@ mod tests {
         let coverage = crate::tiles::ready(&keys, |_| true);
         assert!(display.finish_tiles(1, "complete", coverage, None, &mut view));
         assert_eq!(display.image, Some("complete"));
+    }
+
+    #[test]
+    fn submitted_coverage_waits_for_confirmation_and_error_retains_prior() {
+        use std::sync::atomic::{AtomicBool, Ordering};
+        let keys = crate::tiles::coverage([150, 100], 0, 62, [0.0, 0.0, 1.0, 1.0]);
+        let mut uploads = crate::render::Uploads::default();
+        let done = Arc::new(AtomicBool::new(false));
+        uploads.submitted(1, Arc::clone(&done));
+        let mut display = Display::new(Status::Empty);
+        let mut view = View::default();
+        display.finish(0, Ok("prior"), None, &mut view);
+        view.actual_size();
+        display.generation = 1;
+        display.loading();
+        // All keys have textures/gutters, but submission has not completed.
+        assert!(crate::tiles::ready(&keys, |_| true).is_some());
+        for frame in [1, 2] {
+            let coverage = uploads
+                .coverage(frame, &keys, |_| done.load(Ordering::Acquire))
+                .unwrap();
+            assert!(!display.finish_tiles(1, "next", coverage, None, &mut view));
+            assert_eq!(display.image, Some("prior"));
+        }
+        done.store(true, Ordering::Release);
+        // Even an immediately completed submission must wait for a later frame.
+        assert!(uploads.coverage(1, &keys, |_| true).unwrap().is_none());
+        uploads.inject_failure();
+        let error = uploads.coverage(3, &keys, |_| true).err().unwrap();
+        assert!(error.to_string().contains("Display unavailable"));
+        display.fail(error.to_string());
+        assert_eq!(display.image, Some("prior"));
+        let canvas = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(100.0, 100.0));
+        assert_eq!(view.scale(canvas, [150, 100], 1.0), 1.0);
+        assert!(matches!(display.status, Status::Error(_)));
+    }
+
+    #[test]
+    fn many_tile_uploads_are_bounded_per_frame_and_across_selections() {
+        use std::sync::atomic::{AtomicBool, Ordering};
+        let keys = crate::tiles::coverage([5000, 3000], 0, 1022, [0.0, 0.0, 1.0, 1.0]);
+        let mut uploads = crate::render::Uploads::default();
+        let mut completed = Vec::new();
+        for (i, key) in keys.iter().enumerate() {
+            let frame = i as u64 + 1;
+            assert!(uploads.available(frame));
+            let done = Arc::new(AtomicBool::new(false));
+            uploads.submitted(frame, Arc::clone(&done));
+            assert!(!uploads.available(frame));
+            assert!(!uploads.available(frame + 1)); // also blocks another selection
+            completed.push(*key);
+            assert!(
+                uploads
+                    .coverage(frame, &keys, |k| completed.contains(k))
+                    .unwrap()
+                    .is_none()
+            );
+            done.store(true, Ordering::Release);
+            assert!(!uploads.available(frame)); // no second tile even if GPU was fast
+            assert!(
+                2 * crate::tiles::tile([5000, 3000], *key, 1022).bytes()
+                    <= crate::tiles::STAGING_BYTES
+            );
+        }
+        let mut display = Display::new(Status::Loading);
+        let mut view = View::default();
+        let coverage = uploads
+            .coverage(keys.len() as u64 + 1, &keys, |k| completed.contains(k))
+            .unwrap();
+        assert!(display.finish_tiles(0, "complete", coverage, None, &mut view));
+        assert!(keys.len() > 1);
     }
 
     #[test]
@@ -1077,6 +1163,8 @@ mod tests {
         let dir = TempDir::new();
         let path = dir.0.join("latest.png");
         let mut viewer = Viewer {
+            uploads: crate::render::Uploads::new(None),
+            staging_frame: 0,
             pending_image: None,
             last_paint: None,
             prefetch: None,

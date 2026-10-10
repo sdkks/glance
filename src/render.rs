@@ -11,7 +11,10 @@ use eframe::{
 use std::{
     collections::HashMap,
     future::Future,
-    sync::{Arc, Mutex},
+    sync::{
+        Arc, Mutex,
+        atomic::{AtomicBool, Ordering},
+    },
     task::{Context, Poll, Waker},
 };
 use wgpu::util::DeviceExt;
@@ -30,12 +33,99 @@ pub struct Image {
     nearest: wgpu::Sampler,
     core: usize,
     resident: Mutex<Residency>,
+    uploads: Arc<Mutex<Uploads>>,
+}
+
+// One tile (at most 4 MiB, plus its CPU gutter copy) may be in flight for
+// the entire viewer, including cancelled selections. Never accumulate driver
+// staging by submitting faster than the GPU retires it.
+#[derive(Default)]
+pub struct Uploads {
+    frame: Option<u64>,
+    submitted_frame: Option<u64>,
+    pending: Option<Arc<AtomicBool>>,
+    failure: Arc<Mutex<Option<String>>>,
+}
+
+impl Uploads {
+    pub fn new(state: Option<&egui_wgpu::RenderState>) -> Arc<Mutex<Self>> {
+        let uploads = Self::default();
+        if let Some(state) = state {
+            let failure = Arc::clone(&uploads.failure);
+            state
+                .device
+                .set_device_lost_callback(move |reason, message| {
+                    *failure.lock().expect("device failure lock poisoned") =
+                        Some(format!("Device lost ({reason:?}): {message}"));
+                });
+        }
+        Arc::new(Mutex::new(uploads))
+    }
+
+    fn maintain(&mut self, frame: u64, device: &wgpu::Device) -> Result<(), LoadError> {
+        if self.frame != Some(frame) {
+            self.frame = Some(frame);
+            if let Err(error) = checked(device, || {
+                device.poll(wgpu::PollType::Poll).map_err(|e| {
+                    LoadError::DisplayUnavailable(format!("Tile upload failed: {e}"))
+                })?;
+                Ok(())
+            }) {
+                let message = match &error {
+                    LoadError::DisplayUnavailable(message) => message.clone(),
+                    _ => error.to_string(),
+                };
+                *self.failure.lock().expect("device failure lock poisoned") = Some(message);
+                return Err(error);
+            }
+        }
+        self.check_failure()
+    }
+
+    fn check_failure(&self) -> Result<(), LoadError> {
+        if let Some(error) = &*self.failure.lock().expect("device failure lock poisoned") {
+            return Err(LoadError::DisplayUnavailable(error.clone()));
+        }
+        Ok(())
+    }
+
+    pub(crate) fn coverage(
+        &self,
+        frame: u64,
+        visible: &[Key],
+        complete: impl Fn(&Key) -> bool,
+    ) -> Result<Option<tiles::CoverageReady>, LoadError> {
+        self.check_failure()?;
+        if self.submitted_frame == Some(frame) {
+            return Ok(None);
+        }
+        Ok(tiles::ready(visible, complete))
+    }
+
+    #[cfg(test)]
+    pub(crate) fn inject_failure(&self) {
+        *self.failure.lock().unwrap() = Some("Injected upload/device failure".into());
+    }
+
+    pub(crate) fn available(&self, frame: u64) -> bool {
+        self.submitted_frame != Some(frame)
+            && self
+                .pending
+                .as_ref()
+                .is_none_or(|done| done.load(Ordering::Acquire))
+    }
+
+    pub(crate) fn submitted(&mut self, frame: u64, done: Arc<AtomicBool>) {
+        self.submitted_frame = Some(frame);
+        self.pending = Some(done);
+    }
 }
 
 struct Resident {
     texture: wgpu::TextureView,
     bytes: usize,
     age: u64,
+    done: Arc<AtomicBool>,
 }
 #[derive(Default)]
 struct Residency {
@@ -76,6 +166,7 @@ impl Image {
     pub fn upload(
         state: &egui_wgpu::RenderState,
         pixels: Arc<Pixels>,
+        uploads: Arc<Mutex<Uploads>>,
     ) -> Result<Arc<Self>, LoadError> {
         if pixels.levels.is_empty() {
             return Err(LoadError::DisplayUnavailable(
@@ -174,6 +265,7 @@ impl Image {
                 nearest,
                 core,
                 resident: Mutex::new(Residency::default()),
+                uploads,
             }))
         })
     }
@@ -183,7 +275,10 @@ impl Image {
         state: &egui_wgpu::RenderState,
         visible: &[Key],
         adjacent: &[Key],
-    ) -> Result<tiles::CoverageReady, LoadError> {
+        frame: u64,
+    ) -> Result<Option<tiles::CoverageReady>, LoadError> {
+        let mut uploads = self.uploads.lock().expect("upload budget lock poisoned");
+        uploads.maintain(frame, &state.device)?;
         let bytes =
             |key: &Key| tiles::tile(self.pixels.levels[key.level].size, *key, self.core).bytes();
         if visible.iter().map(bytes).sum::<usize>() > tiles::RESIDENT_BYTES {
@@ -211,6 +306,9 @@ impl Image {
             if cache.tiles.contains_key(key) {
                 continue;
             }
+            if !uploads.available(frame) {
+                break;
+            }
             let needed = bytes(key);
             while cache.tiles.values().map(|t| t.bytes).sum::<usize>() + needed
                 > tiles::RESIDENT_BYTES
@@ -228,8 +326,9 @@ impl Image {
                     "GPU tile staging exceeds 16 MiB".into(),
                 ));
             }
-            // Drain each bounded write before the next; driver staging cannot grow
-            // with all tiles across a frame. A failed tile never authorizes admission.
+            // Submission is asynchronous. The coverage witness is withheld until
+            // a later frame polls and observes this submission's completion.
+            let done = Arc::new(AtomicBool::new(false));
             let texture = checked(&state.device, || {
                 let texture = state.device.create_texture(&wgpu::TextureDescriptor {
                     label: Some("linear-premultiplied sRGB tile with gutter"),
@@ -255,29 +354,31 @@ impl Image {
                     },
                     texture.size(),
                 );
-                let submission = state.queue.submit([]);
-                state
-                    .device
-                    .poll(wgpu::PollType::Wait {
-                        submission_index: Some(submission),
-                        timeout: Some(std::time::Duration::from_secs(5)),
-                    })
-                    .map_err(|e| {
-                        LoadError::DisplayUnavailable(format!("Tile upload failed: {e}"))
-                    })?;
+                state.queue.submit([]);
+                let completed = Arc::clone(&done);
+                state.queue.on_submitted_work_done(move || {
+                    completed.store(true, Ordering::Release);
+                });
                 Ok(texture.create_view(&Default::default()))
-            })?;
+            });
+            uploads.submitted(frame, Arc::clone(&done));
+            let texture = texture?;
             cache.tiles.insert(
                 *key,
                 Resident {
                     texture,
                     bytes: needed,
                     age,
+                    done,
                 },
             );
         }
-        tiles::ready(visible, |key| cache.tiles.contains_key(key))
-            .ok_or_else(|| LoadError::DisplayUnavailable("Visible tile staging incomplete".into()))
+        uploads.coverage(frame, visible, |key| {
+            cache
+                .tiles
+                .get(key)
+                .is_some_and(|tile| tile.done.load(Ordering::Acquire))
+        })
     }
 
     pub fn callback(
@@ -287,7 +388,8 @@ impl Image {
         rect: egui::Rect,
         transform: Transform,
         physical_scale: f32,
-    ) -> Result<Prepared, LoadError> {
+        frame: u64,
+    ) -> Result<Option<Prepared>, LoadError> {
         let (a, b, blend) = levels::select(&self.pixels.levels, physical_scale);
         let visible = source_visible(canvas, rect, transform);
         let first = tiles::coverage(self.pixels.levels[a].size, a, self.core, visible);
@@ -308,7 +410,9 @@ impl Image {
                 &second,
             ));
         }
-        let coverage = self.stage(state, &keys, &adjacent)?;
+        let Some(coverage) = self.stage(state, &keys, &adjacent, frame)? else {
+            return Ok(None);
+        };
         checked(&state.device, || {
             let cache = self.resident.lock().expect("GPU residency lock poisoned");
             let mut bindings = Vec::new();
@@ -400,7 +504,7 @@ impl Image {
                     }));
                 }
             }
-            Ok(Prepared {
+            Ok(Some(Prepared {
                 coverage,
                 paint: egui_wgpu::Callback::new_paint_callback(
                     canvas,
@@ -409,7 +513,7 @@ impl Image {
                         bindings,
                     },
                 ),
-            })
+            }))
         })
     }
 }
