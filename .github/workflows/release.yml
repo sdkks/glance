@@ -190,13 +190,21 @@ jobs:
           GH_REPO: ${{ github.repository }}
           RELEASE_TAG: ${{ github.ref_name }}
         run: |
-          if ! gh release view "$RELEASE_TAG" --json isDraft > release-state.json; then
+          set -euo pipefail
+          was_public=false
+          if gh release view "$RELEASE_TAG" --json isDraft > release-state.json; then
+            is_draft=$(python3 -c 'import json; print(str(json.load(open("release-state.json"))["isDraft"]).lower())')
+            if [[ "$is_draft" == false ]]; then
+              was_public=true
+              gh release edit "$RELEASE_TAG" --draft
+            fi
+          else
             gh release create "$RELEASE_TAG" --draft --verify-tag --title "Glance $RELEASE_TAG" \
               --notes 'Test-gated macOS and Linux artifacts with bundled decoder-only AVIF. macOS builds are ad-hoc signed, not Developer ID signed or notarized; see README for Gatekeeper instructions. EXR/HDR, PQ/HLG, XCF and AVIF/JXL sequences remain unsupported.'
-            gh release view "$RELEASE_TAG" --json isDraft > release-state.json
           fi
-          # Never turn an already-public release back into a draft on retry.
-          was_draft=$(python3 -c 'import json; print(str(json.load(open("release-state.json"))["isDraft"]).lower())')
+          echo "Replacing draft release assets (previously public: $was_public)"
+          # Upload/verification failures leave the release hidden as a draft,
+          # including on public-release retries, until recovery succeeds.
           gh release upload "$RELEASE_TAG" dist/* --clobber
           gh release view "$RELEASE_TAG" --json assets > release-assets.json
           python3 <<'PY'
@@ -210,7 +218,5 @@ jobs:
               raise SystemExit(f"Release asset mismatch: expected {expected}, got {actual}")
           print(f"Verified {len(expected)} uploaded assets and their byte sizes")
           PY
-          # A failed upload or verification exits before this publication step.
-          if [[ "$was_draft" == true ]]; then
-            gh release edit "$RELEASE_TAG" --draft=false
-          fi
+          # Every tag run should be public, but only after exact-set verification.
+          gh release edit "$RELEASE_TAG" --draft=false

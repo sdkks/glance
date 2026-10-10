@@ -864,10 +864,14 @@ Pushing the reviewed branch and `vX.Y.Z` tag starts `.github/workflows/release.y
 **gate → package → publish**. Both Ubuntu 24.04 and macOS gates must pass
 `make verify`, `make audit`, and `make machete` before either packaging job
 starts. Both packages must succeed before the release is created/updated with
-`GITHUB_TOKEN`. A new release stays draft until all assets upload successfully
-and their exact names and byte sizes are verified; a failed upload or verification
-leaves it unpublished. Rerunning a tag replaces assets with `--clobber`; an
-already-published release stays public during replacement (not an atomic update).
+`GITHUB_TOKEN`. Before any asset replacement, an existing public release is
+converted to a draft; a new release is created as a draft. Rerunning a tag
+replaces assets with `--clobber`. The release becomes public only after all
+uploads succeed and their exact names and byte sizes match the candidate set
+(including rejection of extra assets). A failed upload or verification leaves
+the release hidden as a draft, even if it was previously public, until a
+successful rerun or manual un-draft. Manual un-draft bypasses this verification
+and can expose an incomplete asset set.
 No crates.io publishing,
 Developer ID signing, or notarization is performed. Ordinary pushes to `main`
 and pull requests run the same gates in `.github/workflows/ci.yml`.
