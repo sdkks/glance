@@ -70,3 +70,7 @@ dmg: macos-artifacts
 
 macos-smoke:
 	sh scripts/smoke-macos.sh "$(IMAGE)"
+# Reproducible distribution notices (Python 3.11+ is build-time only).
+.PHONY: notices
+notices:
+	python3 scripts/generate-notices.py $(NOTICES_ARGS)
