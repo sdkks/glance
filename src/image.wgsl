@@ -1,4 +1,9 @@
-@group(0) @binding(0) var<uniform> bounds: vec4<f32>;
+struct Mapping {
+    bounds: vec4<f32>,
+    source_x: vec4<f32>,
+    source_y: vec4<f32>,
+}
+@group(0) @binding(0) var<uniform> mapping: Mapping;
 @group(0) @binding(1) var image: texture_2d<f32>;
 @group(0) @binding(2) var image_sampler: sampler;
 
@@ -11,8 +16,9 @@ struct Vertex {
     let coordinates = array<vec2<f32>, 6>(vec2(0, 0), vec2(1, 0), vec2(0, 1), vec2(0, 1), vec2(1, 0), vec2(1, 1));
     let uv = coordinates[index];
     var result: Vertex;
-    result.position = vec4(mix(bounds.xy, bounds.zw, uv), 0, 1);
-    result.uv = uv;
+    result.position = vec4(mix(mapping.bounds.xy, mapping.bounds.zw, uv), 0, 1);
+    let coordinate = vec3(uv, 1);
+    result.uv = vec2(dot(mapping.source_x.xyz, coordinate), dot(mapping.source_y.xyz, coordinate));
     return result;
 }
 
