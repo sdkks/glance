@@ -38,6 +38,18 @@ attempt that cropped a supplied artwork sheet by a mismatched reference grid was
 rejected by the human and removed. The original Downloads file is not needed to
 build or regenerate the icons; no Python or extra tooling is required.
 
+## Original AVIF transform fixtures
+
+`assets/test/web/{pasp,clap,crop-source,crop-aspect-oriented,pq,hlg,sequence}.avif`
+are independently generated from this project's original `alpha.png` using
+avifenc 1.4.2 / aom 3.14.1. The EXIF orientation payload is original analytic
+TIFF metadata. Exact generation commands and depth/subsampling qualifications
+are in `assets/test/web/README.md`; no encoder dependency is added to the app.
+The external hato conformance sample is not redistributed because its license
+was not established. Clean aperture is resolved by libavif's validated crop API;
+pixel aspect is resampled to square pixels in the existing U16 normalization
+path. Decoder-only shipping-artifact and native-notice obligations are unchanged.
+
 ## Bundled fonts
 
 `epaint_default_fonts` 0.36.2 embeds Hack, Noto Emoji, Ubuntu Light, and emoji-icon-font.
