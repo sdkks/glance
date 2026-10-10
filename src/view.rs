@@ -55,9 +55,13 @@ impl View {
         self.scale = Some(new);
     }
 
-    pub fn pan(&mut self, delta: Vec2, canvas: Rect, image: [usize; 2], ppp: f32) {
+    pub fn enlarged(&self, canvas: Rect, image: [usize; 2], ppp: f32) -> bool {
         let size = self.rect(canvas, image, ppp).size();
-        if size.x > canvas.width() || size.y > canvas.height() {
+        size.x > canvas.width() || size.y > canvas.height()
+    }
+
+    pub fn pan(&mut self, delta: Vec2, canvas: Rect, image: [usize; 2], ppp: f32) {
+        if self.enlarged(canvas, image, ppp) {
             self.pan += delta;
         }
     }

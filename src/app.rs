@@ -110,6 +110,53 @@ enum Command {
     Reveal,
 }
 
+#[derive(Default)]
+struct SpacePan {
+    held: bool,
+    dragging: bool,
+    // A released temporary gesture must not fall through to ordinary left-drag pan.
+    cancelled_drag: bool,
+}
+
+impl SpacePan {
+    fn update_key(&mut self, pressed: bool, down: bool, enabled: bool, pointer_down: bool) {
+        if !pointer_down {
+            self.dragging = false;
+            self.cancelled_drag = false;
+        }
+        if !enabled || !down {
+            self.held = false;
+            self.cancelled_drag |= self.dragging;
+            self.dragging = false;
+        } else if pressed {
+            self.held = true;
+        }
+    }
+
+    fn active(&self, enlarged: bool) -> bool {
+        self.held && enlarged && !self.cancelled_drag
+    }
+
+    fn pan_drag(&mut self, dragged: bool, enlarged: bool) -> bool {
+        self.dragging = dragged && self.active(enlarged);
+        dragged && !self.cancelled_drag
+    }
+
+    fn cursor(&self, enlarged: bool) -> Option<egui::CursorIcon> {
+        self.active(enlarged).then_some(if self.dragging {
+            egui::CursorIcon::Grabbing
+        } else {
+            egui::CursorIcon::Grab
+        })
+    }
+}
+
+fn shortcuts_enabled(ctx: &egui::Context) -> bool {
+    !ctx.egui_wants_keyboard_input()
+        && !egui::Popup::is_any_open(ctx)
+        && ctx.input(|input| input.focused)
+}
+
 pub struct Viewer {
     uploads: Arc<std::sync::Mutex<crate::render::Uploads>>,
     staging_frame: u64,
@@ -131,6 +178,7 @@ pub struct Viewer {
     settings_store: crate::settings::Store,
     sort: Sort,
     view: View,
+    space_pan: SpacePan,
     render_state: Option<eframe::egui_wgpu::RenderState>,
     clipboard: Option<arboard::Clipboard>,
     action_error: Option<String>,
@@ -187,6 +235,7 @@ impl Viewer {
             settings_store,
             sort: Sort::default(),
             view: View::default(),
+            space_pan: SpacePan::default(),
             render_state: cc.wgpu_render_state.clone(),
             clipboard: None,
             action_error: prefetch_error,
@@ -501,6 +550,7 @@ impl Viewer {
     }
 
     fn dialog(&mut self, frame: &eframe::Frame) {
+        self.space_pan.update_key(false, false, false, true);
         let mut dialog = rfd::FileDialog::new()
             .set_title("Open image")
             .add_filter("JPEG and PNG", &["jpg", "jpeg", "png"]);
@@ -628,6 +678,42 @@ impl Viewer {
     }
 }
 
+fn keyboard_command(ctx: &egui::Context) -> Option<Command> {
+    let mut command = None;
+    if ctx.input_mut(|input| input.consume_key(Modifiers::COMMAND, Key::O)) {
+        command = Some(Command::Open);
+    }
+    if ctx.input_mut(|input| input.consume_key(Modifiers::SHIFT, Key::R)) {
+        command = Some(Command::Transform(Operation::Counterclockwise));
+    }
+    for (key, action) in [
+        (Key::R, Command::Transform(Operation::Clockwise)),
+        (Key::M, Command::Transform(Operation::Mirror)),
+        (Key::F, Command::Transform(Operation::Flip)),
+        (Key::ArrowLeft, Command::Navigate(Direction::Previous)),
+        (Key::ArrowRight, Command::Navigate(Direction::Next)),
+        (Key::Home, Command::Navigate(Direction::First)),
+        (Key::End, Command::Navigate(Direction::Last)),
+        (Key::Num0, Command::Fit),
+        (Key::Num1, Command::Fit),
+        (Key::Num2, Command::ActualSize),
+        (Key::Plus, Command::Zoom(1.25)),
+        (Key::Equals, Command::Zoom(1.25)),
+        (Key::Minus, Command::Zoom(0.8)),
+    ] {
+        if ctx.input_mut(|input| input.consume_key(Modifiers::NONE, key)) {
+            command = Some(action);
+        }
+    }
+    if ctx.input_mut(|input| {
+        input.consume_key(Modifiers::SHIFT, Key::Plus)
+            || input.consume_key(Modifiers::SHIFT, Key::Equals)
+    }) {
+        command = Some(Command::Zoom(1.25));
+    }
+    command
+}
+
 fn menu_command(ui: &mut egui::Ui, label: &str, action: Command, command: &mut Option<Command>) {
     if ui.button(label).clicked() {
         *command = Some(action);
@@ -669,43 +755,27 @@ impl eframe::App for Viewer {
         if let Some(path) = dropped.first().map(|file| file.path().to_path_buf()) {
             self.open(path);
         }
-        let shortcuts_enabled = !ctx.egui_wants_keyboard_input()
-            && !egui::Popup::is_any_open(&ctx)
-            && ctx.input(|input| input.focused);
-        let mut command = None;
-        if shortcuts_enabled {
-            if ctx.input_mut(|input| input.consume_key(Modifiers::COMMAND, Key::O)) {
-                command = Some(Command::Open);
-            }
-            if ctx.input_mut(|input| input.consume_key(Modifiers::SHIFT, Key::R)) {
-                command = Some(Command::Transform(Operation::Counterclockwise));
-            }
-            for (key, action) in [
-                (Key::R, Command::Transform(Operation::Clockwise)),
-                (Key::M, Command::Transform(Operation::Mirror)),
-                (Key::F, Command::Transform(Operation::Flip)),
-                (Key::ArrowLeft, Command::Navigate(Direction::Previous)),
-                (Key::ArrowRight, Command::Navigate(Direction::Next)),
-                (Key::Home, Command::Navigate(Direction::First)),
-                (Key::End, Command::Navigate(Direction::Last)),
-                (Key::Num0, Command::Fit),
-                (Key::Num1, Command::Fit),
-                (Key::Num2, Command::ActualSize),
-                (Key::Plus, Command::Zoom(1.25)),
-                (Key::Equals, Command::Zoom(1.25)),
-                (Key::Minus, Command::Zoom(0.8)),
-            ] {
-                if ctx.input_mut(|input| input.consume_key(Modifiers::NONE, key)) {
-                    command = Some(action);
-                }
-            }
-            if ctx.input_mut(|input| {
-                input.consume_key(Modifiers::SHIFT, Key::Plus)
-                    || input.consume_key(Modifiers::SHIFT, Key::Equals)
-            }) {
-                command = Some(Command::Zoom(1.25));
-            }
-        }
+        let shortcuts_enabled = shortcuts_enabled(&ctx);
+        ctx.input(|input| {
+            let pressed = input.events.iter().any(|event| {
+                matches!(
+                    event,
+                    egui::Event::Key {
+                        key: Key::Space,
+                        pressed: true,
+                        repeat: false,
+                        ..
+                    }
+                )
+            });
+            self.space_pan.update_key(
+                pressed,
+                input.key_down(Key::Space),
+                shortcuts_enabled,
+                input.pointer.primary_down(),
+            );
+        });
+        let mut command = shortcuts_enabled.then(|| keyboard_command(&ctx)).flatten();
         egui::Panel::top("menus").show(ui, |ui| {
             egui::MenuBar::new().ui(ui, |ui| self.menus(ui, &mut command));
         });
@@ -732,6 +802,10 @@ impl eframe::App for Viewer {
                 response.context_menu(|ui| {
                     self.menus(ui, &mut command);
                 });
+                // Menus can acquire focus in this frame, after the initial key guard.
+                if !crate::app::shortcuts_enabled(&ctx) {
+                    self.space_pan.update_key(false, false, false, true);
+                }
                 // Stage against the framing that will actually be committed. The
                 // previous image/view remain intact until every visible tile is ready.
                 if let Some((generation, version, image)) = self.pending_image.take()
@@ -788,8 +862,19 @@ impl eframe::App for Viewer {
                     }
                     size = self.view.transform.size(image.size);
                     if shortcuts_enabled && !egui::Popup::is_any_open(&ctx) {
-                        if response.dragged() {
+                        let enlarged = self.view.enlarged(canvas, size, ppp);
+                        let dragged = if self.space_pan.held {
+                            response.dragged_by(egui::PointerButton::Primary)
+                        } else {
+                            response.dragged()
+                        };
+                        if self.space_pan.pan_drag(dragged, enlarged) {
                             self.view.pan(response.drag_delta(), canvas, size, ppp);
+                        }
+                        if (response.hovered() || response.dragged())
+                            && let Some(cursor) = self.space_pan.cursor(enlarged)
+                        {
+                            ctx.set_cursor_icon(cursor);
                         }
                         if response.hovered()
                             && let Some(pointer) = ctx.input(|i| i.pointer.hover_pos())
@@ -910,6 +995,141 @@ impl eframe::App for Viewer {
 mod tests {
     use super::*;
     use crate::{decode::LoadError, folder::tests::TempDir};
+
+    #[test]
+    fn space_hold_repeats_release_and_cursor() {
+        let mut pan = SpacePan::default();
+        pan.update_key(true, true, true, false);
+        assert_eq!(pan.cursor(true), Some(egui::CursorIcon::Grab));
+        for _ in 0..5 {
+            pan.update_key(false, true, true, false); // repeat is not a fresh press
+            assert!(pan.active(true));
+        }
+        assert!(pan.pan_drag(true, true));
+        assert_eq!(pan.cursor(true), Some(egui::CursorIcon::Grabbing));
+        pan.update_key(false, false, true, false);
+        assert!(!pan.held);
+        assert_eq!(pan.cursor(true), None);
+    }
+
+    #[test]
+    fn space_release_mid_drag_requires_mouse_release() {
+        let mut pan = SpacePan::default();
+        pan.update_key(true, true, true, true);
+        assert!(pan.pan_drag(true, true));
+        pan.update_key(false, false, true, true);
+        assert!(!pan.pan_drag(true, true));
+        assert_eq!(pan.cursor(true), None);
+        pan.update_key(true, true, true, true);
+        assert!(!pan.pan_drag(true, true)); // re-holding cannot revive the cancelled gesture
+        pan.update_key(false, false, true, false);
+        assert!(pan.pan_drag(true, true)); // next ordinary drag is unaffected
+    }
+
+    #[test]
+    fn space_focus_guard_cancels_and_requires_fresh_press() {
+        let mut pan = SpacePan::default();
+        pan.update_key(true, true, false, false);
+        assert!(!pan.active(true));
+        pan.update_key(false, true, true, false);
+        assert!(!pan.active(true));
+        pan.update_key(true, true, true, true);
+        assert!(pan.pan_drag(true, true));
+        pan.update_key(false, true, false, true); // popup, typing focus, or window focus loss
+        assert!(!pan.active(true));
+        assert!(!pan.pan_drag(true, true));
+        pan.update_key(false, true, true, true);
+        assert!(!pan.active(true));
+    }
+
+    #[test]
+    fn space_fitted_image_is_noop_and_hold_can_wait_for_enlargement() {
+        let canvas = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(400.0, 300.0));
+        let mut view = View::default();
+        let mut pan = SpacePan::default();
+        pan.update_key(true, true, true, false);
+        assert!(!view.enlarged(canvas, [1600, 800], 1.0));
+        assert_eq!(pan.cursor(view.enlarged(canvas, [1600, 800], 1.0)), None);
+        let before = view.rect(canvas, [1600, 800], 1.0);
+        view.pan(egui::vec2(10.0, 20.0), canvas, [1600, 800], 1.0);
+        assert_eq!(view.rect(canvas, [1600, 800], 1.0), before);
+        view.actual_size();
+        assert!(pan.active(view.enlarged(canvas, [1600, 800], 1.0)));
+        assert!(pan.pan_drag(true, true));
+        view.pan(egui::vec2(10.0, 20.0), canvas, [1600, 800], 1.0);
+        assert_eq!(
+            view.rect(canvas, [1600, 800], 1.0).center(),
+            canvas.center() + egui::vec2(10.0, 20.0)
+        );
+    }
+
+    fn key_event(key: Key, repeat: bool) -> egui::Event {
+        egui::Event::Key {
+            key,
+            physical_key: None,
+            pressed: true,
+            repeat,
+            modifiers: Modifiers::NONE,
+        }
+    }
+
+    #[test]
+    fn space_does_not_dispatch_or_consume_navigation_or_zoom() {
+        for repeat in [false, true] {
+            for other in [None, Some(Key::ArrowRight), Some(Key::Plus)] {
+                let ctx = egui::Context::default();
+                let mut events = vec![key_event(Key::Space, repeat)];
+                if let Some(key) = other {
+                    events.push(key_event(key, false));
+                }
+                let mut output = ctx.run_ui(
+                    egui::RawInput {
+                        events,
+                        ..Default::default()
+                    },
+                    |ui| {
+                        let command = keyboard_command(ui.ctx());
+                        match other {
+                            None => assert!(command.is_none()),
+                            Some(Key::ArrowRight) => {
+                                assert!(matches!(command, Some(Command::Navigate(Direction::Next))))
+                            }
+                            Some(Key::Plus) => {
+                                assert!(matches!(command, Some(Command::Zoom(1.25))))
+                            }
+                            _ => unreachable!(),
+                        }
+                        assert!(ui.ctx().input(|input| input.key_pressed(Key::Space)));
+                    },
+                );
+                output.textures_delta.clear();
+            }
+        }
+    }
+
+    #[test]
+    fn existing_keyboard_guard_blocks_popup_typing_and_unfocused_window() {
+        for guard in 0..3 {
+            let ctx = egui::Context::default();
+            let mut output = ctx.run_ui(
+                egui::RawInput {
+                    focused: guard != 2,
+                    ..Default::default()
+                },
+                |ui| {
+                    match guard {
+                        0 => egui::Popup::open_id(ui.ctx(), egui::Id::new("menu")),
+                        1 => ui
+                            .ctx()
+                            .memory_mut(|memory| memory.request_focus(egui::Id::new("text"))),
+                        _ => {}
+                    }
+                    assert!(!shortcuts_enabled(ui.ctx()));
+                },
+            );
+            output.textures_delta.clear();
+        }
+    }
 
     #[test]
     fn prefetched_and_history_hits_use_atomic_admission_without_decode() {
@@ -1208,6 +1428,7 @@ mod tests {
             settings_store: crate::settings::Store::session_only(),
             sort: Sort::default(),
             view: View::default(),
+            space_pan: SpacePan::default(),
             render_state: None,
             clipboard: None,
             action_error: None,
