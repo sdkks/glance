@@ -160,11 +160,15 @@ impl SpacePan {
     }
 
     fn cursor(&self, enlarged: bool, moving: bool) -> Option<egui::CursorIcon> {
-        enlarged.then_some(if moving && !self.cancelled_drag {
-            egui::CursorIcon::Grabbing
+        if !enlarged || self.cancelled_drag {
+            None
+        } else if moving {
+            Some(egui::CursorIcon::Grabbing)
+        } else if self.held {
+            Some(egui::CursorIcon::Grab)
         } else {
-            egui::CursorIcon::Grab
-        })
+            None
+        }
     }
 }
 
@@ -1136,7 +1140,11 @@ mod tests {
                             if step == 1 {
                                 assert_eq!(
                                     ctx.output(|out| out.cursor_icon),
-                                    egui::CursorIcon::Grab
+                                    if space {
+                                        egui::CursorIcon::Grab
+                                    } else {
+                                        egui::CursorIcon::Default
+                                    }
                                 );
                             }
                             if step >= 3 {
@@ -1262,7 +1270,7 @@ mod tests {
                                     },
                                     "guard={guard}, image={image}, step={step}"
                                 );
-                                if step == 1 || step == 2 {
+                                if step >= 1 {
                                     assert_eq!(
                                         ctx.output(|out| out.cursor_icon),
                                         match (image, step) {
@@ -1317,6 +1325,7 @@ mod tests {
     #[test]
     fn space_hold_repeats_release_and_cursor() {
         let mut pan = SpacePan::default();
+        assert_eq!(pan.cursor(true, false), None);
         pan.update_key(true, true, true, false);
         assert_eq!(pan.cursor(true, false), Some(egui::CursorIcon::Grab));
         for _ in 0..5 {
@@ -1327,7 +1336,7 @@ mod tests {
         assert_eq!(pan.cursor(true, true), Some(egui::CursorIcon::Grabbing));
         pan.update_key(false, false, true, false);
         assert!(!pan.held);
-        assert_eq!(pan.cursor(true, false), Some(egui::CursorIcon::Grab));
+        assert_eq!(pan.cursor(true, false), None);
     }
 
     #[test]
@@ -1337,9 +1346,10 @@ mod tests {
         assert!(pan.pan_drag(true, true));
         pan.update_key(false, false, true, true);
         assert!(!pan.pan_drag(true, true));
-        assert_eq!(pan.cursor(true, true), Some(egui::CursorIcon::Grab));
+        assert_eq!(pan.cursor(true, true), None);
         pan.update_key(true, true, true, true);
         assert!(!pan.pan_drag(true, true)); // re-holding cannot revive the cancelled gesture
+        assert_eq!(pan.cursor(true, false), None);
         pan.update_key(false, false, true, false);
         assert!(pan.pan_drag(true, true)); // next ordinary drag is unaffected
     }
@@ -1356,6 +1366,8 @@ mod tests {
         pan.update_key(false, true, false, true); // popup, typing focus, or window focus loss
         assert!(!pan.active(true));
         assert!(!pan.pan_drag(true, true));
+        assert_eq!(pan.cursor(true, true), None);
+        assert_eq!(pan.cursor(true, false), None);
         pan.update_key(false, true, true, true);
         assert!(!pan.active(true));
     }
