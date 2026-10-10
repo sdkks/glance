@@ -443,20 +443,18 @@ or runtime dependencies are required. Outputs were byte-identical across two
 runs with sips-316 / macOS 26.6.2; byte identity across tool/OS versions is not
 promised. No embedded timestamp differences were observed.
 
-The source of truth is `assets/icon/glance-icon-master.png` (macOS square) and
-`assets/icon/glance-icon-linux-master.png` (Linux round), both 1024×1024.
-The supplied instructions name `glance_assets.png`, but the supplied file was
-`glance app assets.jpg` (2400×1792). Their five boxes were cropped literally:
-each endpoint was scaled independently from the 1152×864 reference and truncated
-with `int`, as in the supplied Pillow script. The exact crops are
-`app_icon_mac.png` / `app_icon_linux.png` (1066×1062), `tray_icon.png` (266×266),
-and `icon_small_square.png` / `icon_small_round.png` (133×133) in `assets/icon/`.
-The large crops were resized to square masters, without added padding, background
-removal, redrawing, or compositing. The JPEG has no alpha, so its background is
-preserved. Masters use RGBA with fully opaque alpha for icon encoding; this does
-not remove the supplied background. No vector source was supplied. Tiny/tray
-crops are preserved but are not used for application resampling or a new tray
-feature.
+The source of truth is the single committed master
+`assets/icon/glance-icon-master.png`, the human-supplied artwork
+(`glance-enhanced.png`, 2048×2048, RGBA with a real alpha channel — the rounded
+edges are transparent). It is used for **both** platforms: the macOS iconset and
+the Linux hicolor set are derived from it. `make icons` asserts that every
+rendered size still reports an alpha channel and refuses to publish a flattened
+result, so transparency cannot be silently lost by a future tool change.
+
+This replaces the earlier attempt that cropped a supplied artwork sheet literally
+from a 1152×864 reference grid (`glance app assets.jpg` is 2400×1792). Those crops
+did not land on the artwork and were rejected by the human; the crops and the
+second Linux master were removed. Do not reintroduce sheet cropping.
 
 Future macOS packaging must copy `resources/glance.icns` to
 `Glance.app/Contents/Resources/glance.icns` and put this entry in
@@ -477,7 +475,7 @@ may require that desktop entry; viewport icons alone do not replace packaging.
 
 Linux cannot run the macOS-only `make icons` target: use the committed PNGs or
 regenerate them on macOS. An offline Linux alternative, if updating artwork,
-is ImageMagick, e.g. `magick assets/icon/glance-icon-linux-master.png -resize
+is ImageMagick, e.g. `magick assets/icon/glance-icon-master.png -resize
 24x24 assets/icons/hicolor/24x24/apps/glance.png`, repeated for each listed size.
 That alternative is not a project dependency, has not been validated here, and
 need not match sips bytes; `.icns` regeneration still requires macOS.

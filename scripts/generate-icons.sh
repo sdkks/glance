@@ -1,5 +1,9 @@
 #!/bin/sh
-# Rebuild derived icons without changing the committed cropped artwork/masters.
+# Regenerate the derived icon bundle from the single committed master.
+#
+# The master is human-supplied artwork with a real alpha channel (transparent
+# rounded edges). Alpha is preserved end-to-end and asserted below so a future
+# tool change cannot silently flatten it.
 set -eu
 cd "$(dirname "$0")/.."
 for tool in sips iconutil; do
@@ -11,21 +15,24 @@ done
 scratch=$(mktemp -d "${TMPDIR:-/tmp}/glance-icons.XXXXXX")
 trap 'rm -rf "$scratch"' EXIT HUP INT TERM
 mkdir -p "$scratch/glance.iconset" "$scratch/hicolor"
-mac_master=assets/icon/glance-icon-master.png
-linux_master=assets/icon/glance-icon-linux-master.png
+master=assets/icon/glance-icon-master.png
 
 render() {
     sips -z "$2" "$2" "$1" --out "$3" >/dev/null
+    if ! sips -g hasAlpha "$3" | grep -q 'yes'; then
+        printf 'Alpha channel was lost rendering %s; refusing to publish.\n' "$3" >&2
+        exit 1
+    fi
 }
 
 for size in 16 32 128 256 512; do
-    render "$mac_master" "$size" "$scratch/glance.iconset/icon_${size}x${size}.png"
-    render "$mac_master" "$((size * 2))" "$scratch/glance.iconset/icon_${size}x${size}@2x.png"
+    render "$master" "$size" "$scratch/glance.iconset/icon_${size}x${size}.png"
+    render "$master" "$((size * 2))" "$scratch/glance.iconset/icon_${size}x${size}@2x.png"
 done
 iconutil -c icns "$scratch/glance.iconset" -o "$scratch/glance.icns"
 for size in 16 24 32 48 64 128 256; do
     mkdir -p "$scratch/hicolor/${size}x${size}/apps"
-    render "$linux_master" "$size" "$scratch/hicolor/${size}x${size}/apps/glance.png"
+    render "$master" "$size" "$scratch/hicolor/${size}x${size}/apps/glance.png"
 done
 
 # Stage all generation first; retain existing files/mtimes when bytes match.
