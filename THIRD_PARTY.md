@@ -10,9 +10,13 @@ source is included. Direct dependencies: eframe 0.36.2 (MIT OR Apache-2.0), imag
 and macOS-only objc2 0.6.5 (MIT), objc2-app-kit 0.3.2 (Zlib OR Apache-2.0 OR MIT),
 objc2-foundation 0.3.2 (MIT), moxcms 0.8.1 (BSD-3-Clause OR Apache-2.0), and
 half 2.7.1 (MIT OR Apache-2.0), and toml_edit 0.25.17+spec-1.1.0 (MIT OR Apache-2.0).
-Settings parsing, color/half-float and clipboard adapters promote
-already-resolved packages to direct dependencies; the resolved package inventory
-is unchanged. TIFF is now directly enabled in image (already resolved transitively).
+Settings parsing, color/half-float and clipboard adapters promoted
+already-resolved packages to direct dependencies. Raster/icon coverage adds the
+selective direct dependency image-extras 0.1.1 (MIT OR Apache-2.0), and enables
+image's BMP/ICO/TGA/PNM/GIF/WebP codecs. The eight new resolved packages are
+byteorder, color_quant, gif, icns, image-extras, image-webp, pcx and wbmp; exact
+versions and permissive OR expressions appear below. No existing package was
+upgraded, and no license policy exceptions were added.
 
 The graph uses permissive licenses (including MIT/Apache/BSD/ISC/Zlib/Unicode).
 For OR expressions, a compatible permissive alternative is available. Preserve
@@ -73,6 +77,7 @@ increment's manifest. Package source URLs below identify exact registry versions
 | bumpalo | 3.20.3 | MIT OR Apache-2.0 | https://crates.io/crates/bumpalo/3.20.3 |
 | bytemuck | 1.25.2 | Zlib OR Apache-2.0 OR MIT | https://crates.io/crates/bytemuck/1.25.2 |
 | bytemuck_derive | 1.12.1 | Zlib OR Apache-2.0 OR MIT | https://crates.io/crates/bytemuck_derive/1.12.1 |
+| byteorder | 1.5.0 | Unlicense OR MIT | https://crates.io/crates/byteorder/1.5.0 |
 | byteorder-lite | 0.1.0 | Unlicense OR MIT | https://crates.io/crates/byteorder-lite/0.1.0 |
 | bytes | 1.12.1 | MIT | https://crates.io/crates/bytes/1.12.1 |
 | calloop | 0.13.0 | MIT | https://crates.io/crates/calloop/0.13.0 |
@@ -86,6 +91,7 @@ increment's manifest. Package source URLs below identify exact registry versions
 | clipboard-win | 5.4.1 | BSL-1.0 | https://crates.io/crates/clipboard-win/5.4.1 |
 | codespan-reporting | 0.13.1 | Apache-2.0 | https://crates.io/crates/codespan-reporting/0.13.1 |
 | color | 0.3.3 | Apache-2.0 OR MIT | https://crates.io/crates/color/0.3.3 |
+| color_quant | 1.1.0 | MIT | https://crates.io/crates/color_quant/1.1.0 |
 | combine | 4.6.8 | MIT | https://crates.io/crates/combine/4.6.8 |
 | concurrent-queue | 2.5.0 | Apache-2.0 OR MIT | https://crates.io/crates/concurrent-queue/2.5.0 |
 | core-foundation | 0.9.4 | MIT OR Apache-2.0 | https://crates.io/crates/core-foundation/0.9.4 |
@@ -132,6 +138,7 @@ increment's manifest. Package source URLs below identify exact registry versions
 | gethostname | 1.1.0 | Apache-2.0 | https://crates.io/crates/gethostname/1.1.0 |
 | getrandom | 0.3.4 | MIT OR Apache-2.0 | https://crates.io/crates/getrandom/0.3.4 |
 | getrandom | 0.4.3 | MIT OR Apache-2.0 | https://crates.io/crates/getrandom/0.4.3 |
+| gif | 0.14.2 | MIT OR Apache-2.0 | https://crates.io/crates/gif/0.14.2 |
 | gl_generator | 0.14.0 | Apache-2.0 | https://crates.io/crates/gl_generator/0.14.0 |
 | glifo | 0.2.0 | Apache-2.0 OR MIT | https://crates.io/crates/glifo/0.2.0 |
 | glow | 0.17.0 | MIT OR Apache-2.0 OR Zlib | https://crates.io/crates/glow/0.17.0 |
@@ -147,7 +154,10 @@ increment's manifest. Package source URLs below identify exact registry versions
 | hashbrown | 0.16.1 | MIT OR Apache-2.0 | https://crates.io/crates/hashbrown/0.16.1 |
 | hashbrown | 0.17.1 | MIT OR Apache-2.0 | https://crates.io/crates/hashbrown/0.17.1 |
 | hermit-abi | 0.5.3 | MIT OR Apache-2.0 | https://crates.io/crates/hermit-abi/0.5.3 |
+| icns | 0.4.0 | MIT | https://crates.io/crates/icns/0.4.0 |
 | image | 0.25.10 | MIT OR Apache-2.0 | https://crates.io/crates/image/0.25.10 |
+| image-extras | 0.1.1 | MIT OR Apache-2.0 | https://crates.io/crates/image-extras/0.1.1 |
+| image-webp | 0.2.4 | MIT OR Apache-2.0 | https://crates.io/crates/image-webp/0.2.4 |
 | indexmap | 2.14.2 | Apache-2.0 OR MIT | https://crates.io/crates/indexmap/2.14.2 |
 | itertools | 0.15.0 | MIT OR Apache-2.0 | https://crates.io/crates/itertools/0.15.0 |
 | jni | 0.22.4 | MIT OR Apache-2.0 | https://crates.io/crates/jni/0.22.4 |
@@ -215,6 +225,7 @@ increment's manifest. Package source URLs below identify exact registry versions
 | ordered-float | 5.5.0 | MIT | https://crates.io/crates/ordered-float/5.5.0 |
 | parking_lot | 0.12.5 | MIT OR Apache-2.0 | https://crates.io/crates/parking_lot/0.12.5 |
 | parking_lot_core | 0.9.12 | MIT OR Apache-2.0 | https://crates.io/crates/parking_lot_core/0.9.12 |
+| pcx | 0.2.5 | MIT OR Apache-2.0 OR WTFPL | https://crates.io/crates/pcx/0.2.5 |
 | peniko | 0.6.1 | Apache-2.0 OR MIT | https://crates.io/crates/peniko/0.6.1 |
 | percent-encoding | 2.3.2 | MIT OR Apache-2.0 | https://crates.io/crates/percent-encoding/2.3.2 |
 | pin-project | 1.1.13 | Apache-2.0 OR MIT | https://crates.io/crates/pin-project/1.1.13 |
@@ -317,6 +328,7 @@ increment's manifest. Package source URLs below identify exact registry versions
 | wayland-protocols-wlr | 0.3.12 | MIT | https://crates.io/crates/wayland-protocols-wlr/0.3.12 |
 | wayland-scanner | 0.31.11 | MIT | https://crates.io/crates/wayland-scanner/0.31.11 |
 | wayland-sys | 0.31.11 | MIT | https://crates.io/crates/wayland-sys/0.31.11 |
+| wbmp | 0.1.2 | MIT OR Apache-2.0 | https://crates.io/crates/wbmp/0.1.2 |
 | web-sys | 0.3.106 | MIT OR Apache-2.0 | https://crates.io/crates/web-sys/0.3.106 |
 | web-time | 1.1.0 | MIT OR Apache-2.0 | https://crates.io/crates/web-time/1.1.0 |
 | weezl | 0.1.12 | MIT OR Apache-2.0 | https://crates.io/crates/weezl/0.1.12 |

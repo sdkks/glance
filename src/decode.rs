@@ -1,11 +1,6 @@
-use std::{
-    fmt,
-    fs::File,
-    io::{Cursor, Read},
-    path::Path,
-};
+use std::{fmt, fs::File, io::Read, path::Path};
 
-use image::{DynamicImage, ImageDecoder, ImageError, ImageFormat, ImageReader, Limits};
+use image::{DynamicImage, ImageError, ImageFormat, Limits};
 
 pub const MAX_ENCODED_BYTES: u64 = 64 * 1024 * 1024;
 pub const MAX_DECODED_BYTES: u64 = 512 * 1024 * 1024;
@@ -47,6 +42,7 @@ pub enum LoadError {
     Io(std::io::Error),
     Malformed(String),
     Unsupported,
+    UnsupportedVariant(String),
     ResourceLimit(String),
     DisplayUnavailable(String),
 }
@@ -58,8 +54,9 @@ impl fmt::Display for LoadError {
             Self::Malformed(error) => write!(f, "Could not decode image: {error}"),
             Self::Unsupported => write!(
                 f,
-                "Unsupported format. This version opens JPEG, PNG and TIFF only."
+                "Unsupported format. See README for supported extensions."
             ),
+            Self::UnsupportedVariant(reason) => write!(f, "Unsupported image variant: {reason}"),
             Self::DisplayUnavailable(reason) => write!(f, "Display unavailable: {reason}"),
             Self::ResourceLimit(reason) => {
                 write!(f, "Image exceeds this version's resource limit: {reason}")
@@ -79,25 +76,14 @@ impl From<ImageError> for LoadError {
         match error {
             ImageError::IoError(error) => Self::Io(error),
             ImageError::Limits(error) => Self::ResourceLimit(error.to_string()),
+            ImageError::Unsupported(error) => Self::UnsupportedVariant(error.to_string()),
             error => Self::Malformed(error.to_string()),
         }
     }
 }
 
 pub fn load(path: &Path, _texture_limit: u32) -> Result<Pixels, LoadError> {
-    let extension = path
-        .extension()
-        .map(|ext| ext.as_encoded_bytes())
-        .unwrap_or_default();
-    let format = if extension.eq_ignore_ascii_case(b"png") {
-        ImageFormat::Png
-    } else if extension.eq_ignore_ascii_case(b"jpg") || extension.eq_ignore_ascii_case(b"jpeg") {
-        ImageFormat::Jpeg
-    } else if extension.eq_ignore_ascii_case(b"tif") || extension.eq_ignore_ascii_case(b"tiff") {
-        ImageFormat::Tiff
-    } else {
-        return Err(LoadError::Unsupported);
-    };
+    let format = crate::formats::format(path).ok_or(LoadError::Unsupported)?;
     let file = File::open(path)?;
     if file.metadata()?.len() > MAX_ENCODED_BYTES {
         return Err(LoadError::ResourceLimit(
@@ -112,15 +98,26 @@ pub fn load(path: &Path, _texture_limit: u32) -> Result<Pixels, LoadError> {
             "encoded input exceeds 64 MiB".into(),
         ));
     }
-    let jpeg_cmyk = format == ImageFormat::Jpeg && crate::color::jpeg_cmyk(&encoded);
+    // image-extras explicitly does not prioritize fuzzing and may panic on bad
+    // input (PCX uses unchecked palette indexing, for example). Contain unwinding
+    // through construction, metadata and decoding so workers remain usable.
+    // This cannot contain allocator aborts or promise memory-safety isolation.
+    std::panic::catch_unwind(|| decode_encoded(format, encoded)).unwrap_or_else(|_| {
+        Err(LoadError::Malformed(format!(
+            "{format:?}: decoder panicked on malformed input"
+        )))
+    })
+}
+
+fn decode_encoded(format: crate::formats::Format, encoded: Vec<u8>) -> Result<Pixels, LoadError> {
+    let jpeg_cmyk = matches!(format, crate::formats::Format::Standard(ImageFormat::Jpeg))
+        && crate::color::jpeg_cmyk(&encoded);
     let dimension_limit = MAX_DIMENSION;
     let mut limits = Limits::default();
     limits.max_image_width = Some(dimension_limit);
     limits.max_image_height = Some(dimension_limit);
     limits.max_alloc = Some(MAX_DECODED_BYTES);
-    let mut reader = ImageReader::with_format(Cursor::new(encoded), format);
-    reader.limits(limits);
-    let mut decoder = reader.into_decoder()?;
+    let mut decoder = crate::formats::decoder(format, encoded, limits)?;
     let (width, height) = decoder.dimensions();
     checked_size(width, height, dimension_limit)?;
     if decoder.total_bytes() > MAX_DECODED_BYTES {
@@ -234,6 +231,9 @@ fn checked_size(width: u32, height: u32, dimension_limit: u32) -> Result<[usize;
         .map_err(|_| LoadError::ResourceLimit("height is not addressable".into()))?;
     Ok([width, height])
 }
+
+#[cfg(test)]
+mod format_tests;
 
 #[cfg(test)]
 mod tests {

@@ -4,6 +4,7 @@ mod color;
 mod decode;
 mod desktop;
 mod folder;
+mod formats;
 mod levels;
 mod loader;
 mod render;
