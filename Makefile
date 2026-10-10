@@ -64,3 +64,13 @@ audit:
 machete:
 	@cargo machete --version >/dev/null 2>&1 || { printf '%s\n' 'cargo-machete missing; see README installation commands.' >&2; exit 1; }
 	cargo machete
+
+# macOS unsigned release artifacts (separate from development/version targets).
+.PHONY: macos-artifacts dmg macos-smoke
+macos-artifacts:
+	sh scripts/package-macos.sh
+
+dmg: macos-artifacts
+
+macos-smoke:
+	sh scripts/smoke-macos.sh "$(IMAGE)"

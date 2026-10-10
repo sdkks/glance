@@ -534,8 +534,8 @@ tracker.
 Embedded orientation is applied once. Output encoding follows the actual attachment
 format (hardware sRGB encoding or explicit OETF, never both). Other formats
 (including explicitly deferred XCF) give an unsupported-format
-error. Animation, native menus/document-open
-integration, packaging and Linux desktop validation are later increments.
+error. Native menus/document-open
+integration and Linux desktop validation are later increments.
 Interactive zoom/pan feel and real input-device classification still need human
 verification on target desktops. No qView code or assets are included.
 
@@ -660,7 +660,8 @@ Future macOS packaging must copy `resources/glance.icns` to
 <string>glance.icns</string>
 ```
 
-There is currently no `.app` bundle, packaging, signing, or notarization pipeline.
+The macOS artifact recipe below creates the `.app` bundle; there is no developer
+certificate signing or notarization pipeline.
 Dev runs embed the 256px platform PNG using eframe's viewport `IconData`; eframe
 also sets the macOS application/Dock icon. A human should confirm Dock appearance.
 On Linux, future packaging should install the hicolor tree under
@@ -705,6 +706,69 @@ if needed. Do not run concurrent Git operations during release.
 
 Release artifact CI will be added separately; this tooling alone does not build
 or publish distribution artifacts.
+
+## Packaging (macOS)
+
+```sh
+make macos-artifacts       # or make dmg; builds the release binary first
+make macos-smoke IMAGE="$PWD/assets/icons/glance.iconset/icon_256x256.png"
+```
+
+Requires macOS, the pinned Rust toolchain and Apple's `ditto`, `hdiutil`,
+`otool` and `plutil` (no additional runtime dependencies). Outputs live in
+`target/macos-artifacts/`: `Glance.app`, `Glance-<version>-<arch>.zip`,
+`Glance-<version>-<arch>.dmg` and `Glance-<version>-<arch>.sha256`.
+Version comes from `[package].version` in `Cargo.toml`; architecture is the
+host's `arm64` or `x86_64`, not Universal. Verify downloads with
+`shasum -a 256 -c Glance-<version>-<arch>.sha256` in that directory.
+The zip uses `ditto --sequesterRsrc --keepParent`; the compressed DMG contains
+`Glance.app` and an `/Applications` symlink. Drag the app to Applications.
+The recipe is reproducible, but archive bytes/checksums may change with tool
+versions or filesystem timestamps; bit-for-bit reproducibility is not claimed.
+
+The bundle identifier is `io.github.glance-viewer.glance` (a stable application
+namespace, not a claim of domain ownership). Display name is Glance, executable
+is `glance`, and the icon is `Contents/Resources/glance.icns`. Both bundle version
+keys use the Cargo version. The declared and compiled minimum macOS version is
+**11.0**, the first Apple Silicon macOS and a common baseline for Intel/ARM;
+actual oldest-OS compatibility remains unverified. Imported image UTIs cover
+all eligible extensions in `src/formats.rs` (including flattened documents),
+with role **Viewer** and handler rank **Alternate**, never Owner/Default.
+Registration does not change existing default associations. Native Finder
+file-open event handling is still deferred: launch with a CLI image argument
+or use Open/drop inside the app; registration alone does not implement events.
+
+Optional native libraries belong in a flat `bundle-libs/*.dylib` directory.
+The script copies them into `Contents/Frameworks` and links the binary with
+`@executable_path/../Frameworks` as an rpath. The native producer must supply
+matching build/pkg-config inputs with `@rpath/<basename>` install names;
+transitive libraries must likewise use `@rpath` or `@loader_path` and all be
+present. Packaging validates these dependencies and fails on absolute external
+paths when `bundle-libs/` exists. It does not rewrite Mach-O files or invalidate
+the linker-generated ad-hoc signatures on Apple Silicon. If the directory is
+absent, copying is a no-op and external development libraries produce warnings:
+**such artifacts require those libraries and are not self-contained releases**.
+Decoder-only AVIF provisioning and native license notices remain separate work;
+Homebrew libavif is a development dependency, not a shipping native build.
+
+These builds are **unsigned and not notarized** (no developer certificate
+signing). Gatekeeper may block a downloaded app: right-click → Open, then
+confirm Open. If necessary, after verifying the source and checksum, remove
+only this app's quarantine attribute:
+
+```sh
+xattr -d com.apple.quarantine /Applications/Glance.app
+```
+
+The smoke command checks checksums, plist syntax, version/icon/executable keys
+and all Viewer/Alternate ranks, extracts the zip and compares its main bundle
+files, then launches the zip and direct bundled binaries with the image. It
+mounts the DMG read-only in a unique temporary mountpoint,
+checks the Applications link, launches its binary and requires the existing
+`Displayed` diagnostic within 30 seconds, then terminates only those processes
+and unmounts/removes the mountpoint. Complete logs remain in the printed temporary
+evidence directory. This confirms renderer admission, not a human Dock/icon or
+Gatekeeper/Finder visual check. **EXR/HDR and PQ/HLG are not supported yet.**
 
 ## Licensing
 
