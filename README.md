@@ -690,13 +690,17 @@ make uninstall-linux
 ```
 
 `PREFIX` must be an absolute canonical path (no dot components or repeated
-slashes). Override it with `make install-linux PREFIX=/absolute/path`.
+slashes). Existing ancestors of the combined destination and installed directories
+must not be symlinks; use physical paths (for example, `pwd -P`) when necessary.
+Override `PREFIX` with `make install-linux PREFIX=/absolute/path`.
 `DESTDIR` is an optional absolute staging root prepended to `PREFIX`, for example
 `make install-linux PREFIX=/usr DESTDIR=/tmp/glance-stage`. Use the **same**
 `PREFIX` and `DESTDIR` for uninstall. Unstaged system prefixes such as `/usr` and
 `/usr/local` require explicit `SUDO=1` confirmation; this flag never runs sudo
 or grants permissions. The installer refuses to overwrite files without its
-own existing manifest. Reinstallation is allowed when all owned files are unchanged.
+own existing manifest. Reinstallation validates every manifest-owned file before
+building or writing anything, refusing if any file is missing, modified, or
+replaced; unchanged installations can be reinstalled.
 
 The installed layout is `bin/glance`, `share/applications/glance.desktop`
 (`Exec=glance %f`, `TryExec=glance`, `Icon=glance`), and
@@ -732,10 +736,12 @@ make uninstall-linux
 ```
 
 For the standalone scratch test, `scratch=$(mktemp -d)` then
+`scratch=$(cd "$scratch" && pwd -P)`,
 `make install-linux PREFIX="$scratch/prefix"` and
 `make uninstall-linux PREFIX="$scratch/prefix"` stage nothing in your home.
 The automated script additionally checks unrelated sentinel files, modification
-refusal, a missing manifest, dry-run, system-prefix guards, and DESTDIR staging.
+refusal on uninstall and reinstall, unchanged reinstall, a missing manifest,
+dry-run, system-prefix guards, and DESTDIR staging with symlink-ancestor refusal.
 It prints its temporary path and the exact file lists and retains the scratch
 directory for inspection. The macOS scratch binary is not a Linux executable.
 

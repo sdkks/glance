@@ -25,6 +25,16 @@ esac
 root=$staging$prefix
 manifest=$root/share/glance/install-manifest
 sizes='16 24 32 48 64 128 256'
+# Check the entire destination ancestry before any build or filesystem writes.
+# Checking only root and its children misses symlinks in DESTDIR or PREFIX.
+ancestor=$root
+while [ "$ancestor" != / ]; do
+    [ ! -L "$ancestor" ] || {
+        echo "Refusing symlink destination ancestor: $ancestor; no files changed" >&2; exit 1
+    }
+    ancestor=${ancestor%/*}
+    [ -n "$ancestor" ] || ancestor=/
+done
 # Refuse redirected destination directories, including dangling symlinks.
 for dir in "$root" "$root/bin" "$root/share" "$root/share/applications" \
     "$root/share/glance" "$root/share/icons" "$root/share/icons/hicolor"; do

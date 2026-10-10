@@ -2,6 +2,8 @@
 # Retain the unique scratch directory and full listings for review.
 set -eu
 scratch=$(mktemp -d)
+# macOS /var and /tmp can be symlinks; test with the physical scratch path.
+scratch=$(cd "$scratch" && pwd -P)
 echo "Scratch prefix test: $scratch"
 prefix=$scratch/prefix
 mkdir -p "$prefix/bin" "$prefix/share/applications"
@@ -39,8 +41,21 @@ for size in 16 24 32 48 64 128 256; do
     cmp "assets/icons/hicolor/${size}x${size}/apps/glance.png" \
         "$prefix/share/icons/hicolor/${size}x${size}/apps/glance.png"
 done
+# An unchanged manifest-owned installation can be installed again safely.
+cp "$prefix/share/glance/install-manifest" "$scratch/manifest-original"
+make install-linux PREFIX="$prefix" > "$scratch/reinstall.log" 2>&1
+cmp "$scratch/manifest-original" "$prefix/share/glance/install-manifest"
 cp "$prefix/share/applications/glance.desktop" "$scratch/desktop-original"
 printf '# changed\n' >> "$prefix/share/applications/glance.desktop"
+cp "$prefix/share/applications/glance.desktop" "$scratch/desktop-modified"
+if make install-linux PREFIX="$prefix" > "$scratch/reinstall-modified.log" 2>&1; then
+    echo 'Modified-file reinstall guard failed' >&2; exit 1
+fi
+grep 'Modified installed file:.*no files changed' "$scratch/reinstall-modified.log"
+cmp "$scratch/desktop-modified" "$prefix/share/applications/glance.desktop"
+cmp "$scratch/manifest-original" "$prefix/share/glance/install-manifest"
+# Refusal must precede even the first payload write, not just preserve desktop.
+cmp target/release/glance "$prefix/bin/glance"
 if make uninstall-linux PREFIX="$prefix" > "$scratch/modified.log" 2>&1; then
     echo 'Modified-file guard failed' >&2; exit 1
 fi
@@ -71,6 +86,15 @@ if make install-linux PREFIX="$scratch/redirect" > "$scratch/symlink.log" 2>&1; 
 fi
 find "$scratch/outside" -type f > "$scratch/outside-after"
 test ! -s "$scratch/outside-after"
+# A symlink above the final prefix must not escape the staging destination.
+mkdir -p "$scratch/ancestor-outside"
+ln -s "$scratch/ancestor-outside" "$scratch/stage-link"
+if make install-linux PREFIX=/usr DESTDIR="$scratch/stage-link/new-stage" > "$scratch/ancestor-symlink.log" 2>&1; then
+    echo 'DESTDIR ancestor-symlink guard failed' >&2; exit 1
+fi
+grep 'Refusing symlink destination ancestor:.*no files changed' "$scratch/ancestor-symlink.log"
+find "$scratch/ancestor-outside" -mindepth 1 > "$scratch/ancestor-outside-after"
+test ! -s "$scratch/ancestor-outside-after"
 make install-linux PREFIX=/usr DESTDIR="$scratch/stage"
 test -x "$scratch/stage/usr/bin/glance"
 make uninstall-linux PREFIX=/usr DESTDIR="$scratch/stage"
@@ -90,4 +114,4 @@ grep 'Warning: desktop cache refresh failed' "$scratch/cache-install.log"
 grep 'Warning: MIME cache refresh failed' "$scratch/cache-install.log"
 HOME="$scratch/cache-home" PATH="$scratch/tools:$PATH" make uninstall-linux > "$scratch/cache-uninstall.log" 2>&1
 test ! -f "$scratch/cache-home/.local/bin/glance"
-echo "PASS: exact installed layout, dry-run, ownership and modification guards, sentinels, DESTDIR, nonfatal cache failures; logs in $scratch"
+echo "PASS: exact installed layout, dry-run, ownership and modification guards, unchanged reinstall, modified reinstall refusal, sentinels, DESTDIR ancestor containment, nonfatal cache failures; logs in $scratch"
