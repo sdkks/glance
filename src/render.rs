@@ -13,7 +13,7 @@ use crate::{
 
 pub struct Image {
     pub size: [usize; 2],
-    pub pixels: Pixels,
+    pub pixels: Arc<Pixels>,
     pipeline: wgpu::RenderPipeline,
     layout: wgpu::BindGroupLayout,
     texture: wgpu::TextureView,
@@ -21,7 +21,10 @@ pub struct Image {
 }
 
 impl Image {
-    pub fn upload(state: &egui_wgpu::RenderState, pixels: Pixels) -> Result<Arc<Self>, LoadError> {
+    pub fn upload(
+        state: &egui_wgpu::RenderState,
+        pixels: Arc<Pixels>,
+    ) -> Result<Arc<Self>, LoadError> {
         let width = u32::try_from(pixels.size[0])
             .map_err(|_| LoadError::ResourceLimit("GPU width".into()))?;
         let height = u32::try_from(pixels.size[1])
