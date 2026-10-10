@@ -142,8 +142,25 @@ impl SpacePan {
         dragged && !self.cancelled_drag
     }
 
-    fn cursor(&self, enlarged: bool, dragged: bool) -> Option<egui::CursorIcon> {
-        enlarged.then_some(if dragged && !self.cancelled_drag {
+    fn pan_delta(&mut self, response: &egui::Response, enlarged: bool) -> egui::Vec2 {
+        let dragged = if self.held {
+            response.dragged_by(egui::PointerButton::Primary)
+        } else {
+            response.dragged()
+        };
+        let drag_pan = self.pan_drag(dragged, enlarged);
+        // Choose one delta, even when Space and a button drag are both active.
+        if self.active(enlarged) && response.hovered() {
+            response.ctx.input(|input| input.pointer.delta())
+        } else if drag_pan {
+            response.drag_delta()
+        } else {
+            egui::Vec2::ZERO
+        }
+    }
+
+    fn cursor(&self, enlarged: bool, moving: bool) -> Option<egui::CursorIcon> {
+        enlarged.then_some(if moving && !self.cancelled_drag {
             egui::CursorIcon::Grabbing
         } else {
             egui::CursorIcon::Grab
@@ -850,6 +867,7 @@ impl eframe::App for Viewer {
                 }
                 let mut trace_center = None;
                 let mut trace_enlarged = false;
+                let mut trace_pan_delta = egui::Vec2::ZERO;
                 if let Some(image) = &self.display.image {
                     let mut size = self.view.transform.size(image.size);
                     let ppp = ctx.pixels_per_point();
@@ -868,16 +886,12 @@ impl eframe::App for Viewer {
                     size = self.view.transform.size(image.size);
                     if shortcuts_enabled && !egui::Popup::is_any_open(&ctx) {
                         let enlarged = self.view.enlarged(canvas, size, ppp);
-                        let dragged = if self.space_pan.held {
-                            response.dragged_by(egui::PointerButton::Primary)
-                        } else {
-                            response.dragged()
-                        };
-                        if self.space_pan.pan_drag(dragged, enlarged) {
-                            self.view.pan(response.drag_delta(), canvas, size, ppp);
-                        }
+                        let delta = self.space_pan.pan_delta(&response, enlarged);
+                        self.view.pan(delta, canvas, size, ppp);
+                        trace_pan_delta = delta;
+                        let moving = delta != egui::Vec2::ZERO || response.dragged();
                         if (response.hovered() || response.dragged())
-                            && let Some(cursor) = self.space_pan.cursor(enlarged, dragged)
+                            && let Some(cursor) = self.space_pan.cursor(enlarged, moving)
                         {
                             ctx.set_cursor_icon(cursor);
                         }
@@ -974,7 +988,7 @@ impl eframe::App for Viewer {
                         )
                     });
                     eprintln!(
-                        "input frame={} space_held_active={} held={} space_down={} primary_down={} dragged={} dragged_primary={} drag_delta={:?} pointer_delta={:?} keyboard_wants={} focus_id={:?} window_focused={} shortcuts={} popup={} cancelled={} hovered={} contains={} cursor={:?} canvas_id={:?} canvas_rect={:?} space_response=none enlarged={} center={:?}",
+                        "input frame={} space_held_active={} held={} space_down={} primary_down={} dragged={} dragged_primary={} drag_delta={:?} pointer_delta={:?} pan_delta={:?} keyboard_wants={} focus_id={:?} window_focused={} shortcuts={} popup={} cancelled={} hovered={} contains={} cursor={:?} canvas_id={:?} canvas_rect={:?} space_response=none enlarged={} center={:?}",
                         ctx.cumulative_frame_nr(),
                         self.space_pan.active(trace_enlarged),
                         self.space_pan.held,
@@ -984,6 +998,7 @@ impl eframe::App for Viewer {
                         response.dragged_by(egui::PointerButton::Primary),
                         response.drag_delta(),
                         pointer_delta,
+                        trace_pan_delta,
                         ctx.egui_wants_keyboard_input(),
                         ctx.memory(|memory| memory.focused()),
                         focused,
@@ -1103,19 +1118,17 @@ mod tests {
                                 pan.update_key(false, false, false, true);
                             }
                             let enlarged = view.enlarged(canvas, [1600, 1000], 1.0);
-                            let dragged = if pan.held {
-                                response.dragged_by(egui::PointerButton::Primary)
+                            let delta = if enabled && !egui::Popup::is_any_open(&ctx) {
+                                pan.pan_delta(&response, enlarged)
                             } else {
-                                response.dragged()
+                                egui::Vec2::ZERO
                             };
-                            if enabled
-                                && !egui::Popup::is_any_open(&ctx)
-                                && pan.pan_drag(dragged, enlarged)
-                            {
-                                view.pan(response.drag_delta(), canvas, [1600, 1000], 1.0);
-                            }
+                            view.pan(delta, canvas, [1600, 1000], 1.0);
                             if (response.hovered() || response.dragged())
-                                && let Some(cursor) = pan.cursor(enlarged, dragged)
+                                && let Some(cursor) = pan.cursor(
+                                    enlarged,
+                                    delta != egui::Vec2::ZERO || response.dragged(),
+                                )
                             {
                                 ctx.set_cursor_icon(cursor);
                             }
@@ -1148,6 +1161,122 @@ mod tests {
                     },
                 );
                 output.textures_delta.clear();
+            }
+        }
+    }
+
+    #[test]
+    fn space_pointer_motion_without_button_and_cancellation() {
+        // Release, popup, typing focus, window focus, and native-dialog cancellation.
+        for guard in 0..5 {
+            for image in 0..3 {
+                let ctx = egui::Context::default();
+                let mut pan = SpacePan::default();
+                let mut view = View::default();
+                if image == 2 {
+                    view.actual_size();
+                }
+                let start = egui::pos2(100.0, 100.0);
+                let delta = egui::vec2(40.0, -20.0);
+                for step in 0..5 {
+                    let mut events = match step {
+                        0 => vec![egui::Event::PointerMoved(start)],
+                        1 => vec![key_event(Key::Space, false)],
+                        2 => vec![egui::Event::PointerMoved(start + delta)],
+                        3 if guard == 0 => vec![egui::Event::Key {
+                            key: Key::Space,
+                            physical_key: None,
+                            pressed: false,
+                            repeat: false,
+                            modifiers: Modifiers::NONE,
+                        }],
+                        4 => vec![egui::Event::PointerMoved(start + delta * 2.0)],
+                        _ => vec![],
+                    };
+                    if step == 3 {
+                        events.push(egui::Event::PointerMoved(start + delta * 1.5));
+                    }
+                    let mut output = ctx.run_ui(
+                        egui::RawInput {
+                            screen_rect: Some(egui::Rect::from_min_size(
+                                egui::Pos2::ZERO,
+                                egui::vec2(400.0, 300.0),
+                            )),
+                            focused: !(guard == 3 && step >= 3),
+                            events,
+                            ..Default::default()
+                        },
+                        |ui| {
+                            if step == 3 {
+                                match guard {
+                                    1 => egui::Popup::open_id(&ctx, egui::Id::new("menu")),
+                                    2 => ctx.memory_mut(|memory| {
+                                        memory.request_focus(egui::Id::new("text"));
+                                    }),
+                                    4 => pan.update_key(false, false, false, true),
+                                    _ => {}
+                                }
+                            }
+                            let enabled = shortcuts_enabled(&ctx);
+                            ctx.input(|input| {
+                                assert!(!input.pointer.any_down());
+                                pan.update_key(
+                                    input.events.iter().any(|event| {
+                                        matches!(
+                                            event,
+                                            egui::Event::Key {
+                                                key: Key::Space,
+                                                pressed: true,
+                                                repeat: false,
+                                                ..
+                                            }
+                                        )
+                                    }),
+                                    input.key_down(Key::Space),
+                                    enabled,
+                                    input.pointer.primary_down(),
+                                );
+                            });
+                            egui::CentralPanel::default().show(ui, |ui| {
+                                let canvas = ui.available_rect_before_wrap();
+                                let response = ui.allocate_rect(canvas, Sense::click_and_drag());
+                                let before = view.rect(canvas, [1600, 1000], 1.0).center();
+                                if image != 0 && enabled {
+                                    let enlarged = view.enlarged(canvas, [1600, 1000], 1.0);
+                                    let motion = pan.pan_delta(&response, enlarged);
+                                    view.pan(motion, canvas, [1600, 1000], 1.0);
+                                    if response.hovered()
+                                        && let Some(cursor) =
+                                            pan.cursor(enlarged, motion != egui::Vec2::ZERO)
+                                    {
+                                        ctx.set_cursor_icon(cursor);
+                                    }
+                                }
+                                let after = view.rect(canvas, [1600, 1000], 1.0).center();
+                                assert_eq!(
+                                    after - before,
+                                    if step == 2 && image == 2 {
+                                        delta
+                                    } else {
+                                        egui::Vec2::ZERO
+                                    },
+                                    "guard={guard}, image={image}, step={step}"
+                                );
+                                if step == 1 || step == 2 {
+                                    assert_eq!(
+                                        ctx.output(|out| out.cursor_icon),
+                                        match (image, step) {
+                                            (2, 1) => egui::CursorIcon::Grab,
+                                            (2, 2) => egui::CursorIcon::Grabbing,
+                                            _ => egui::CursorIcon::Default,
+                                        }
+                                    );
+                                }
+                            });
+                        },
+                    );
+                    output.textures_delta.clear();
+                }
             }
         }
     }

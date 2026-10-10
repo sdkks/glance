@@ -38,9 +38,12 @@ physical screen pixel, including HiDPI. `+` (or `=`) and `−` zoom about the ca
 center. A line-unit mouse wheel zooms at the pointer, clamped to 0.01×–500×.
 Drag or two-axis point-unit trackpad scrolling pans when the image exceeds the
 viewport; scrolling never navigates. Ctrl/Command+scroll also zooms at the pointer.
-Hold **Space** for temporary pan mode, then **left-drag** on an enlarged image:
-the canvas cursor is a grab hand while held and a grabbing hand during the drag.
-Releasing Space mid-drag stops panning until the mouse button is released; losing
+Hold **Space** for temporary pan mode, then **move the mouse without pressing a
+button** over an enlarged image: the canvas cursor is a grab hand while held and
+a grabbing hand while moving or dragging. Left-drag also pans, with or without
+Space; combining them applies the pointer movement only once.
+Releasing Space stops this temporary motion immediately; releasing mid-drag stops
+panning until the mouse button is released. Losing
 window focus or opening a menu/dialog cancels the mode. Right-click remains the
 context menu; middle-click is unchanged. Space on a fitted image does nothing.
 A hold may wait through loading and activates once an enlarged image is displayed.
