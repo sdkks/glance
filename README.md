@@ -127,7 +127,8 @@ The **Playback** menu offers Pause/Resume (`P`) and Next Frame (`.`). Pause hold
 displayed composed frame; Resume continues its timer. Next Frame pauses, advances
 exactly one composed frame from the displayed frame, and wraps for inspection.
 These shortcuts respect typing/menu/window focus. Space remains temporary pan.
-A new file starts playing, regardless of the previous animation's pause state.
+A new file starts playing unless Animation rate is Off, regardless of the previous
+animation's pause state.
 Rotate/mirror/flip, zoom/pan and Actual Size apply to every displayed frame; Copy
 Image copies the currently displayed full composed frame with those transforms.
 
@@ -135,12 +136,26 @@ Browser-compatible timing maps missing/zero delays and encoded delays ≤10 ms
 (0–1 GIF centiseconds) to 100 ms. Other delays have a default 20 ms floor
 (maximum 50 fps): 0, 1, 2, 5, 10 and 20 centiseconds play as 100, 100, 20, 50,
 100 and 200 ms respectively. Delays ≥20 ms, including fractional durations, are
-honored as encoded. The rate cap is not yet configurable. Timing uses a monotonic clock and
+honored as encoded. **Settings → Animation rate** offers these persisted choices,
+with a radio indicator for the active mode:
+
+- **Honor file (max 50 fps)** (default): browser-compatible timing described above.
+- **Honor file exactly**: encoded delays, with only a 5 ms safety floor (no 50 fps cap).
+- **30 fps**, **24 fps**, **15 fps**, **10 fps**: fixed intervals of 1000/fps ms,
+  ignoring encoded delays while preserving the file's loop structure.
+- **Off (first frame only)**: a newly opened animation stays on its first composed
+  frame. Switching Off during playback holds the currently displayed frame,
+  without restarting the file. **Next Frame** still steps manually; Resume does
+  not override Off.
+
+A rate change applies immediately without reload or position reset: the next
+interval starts at the change using the displayed frame's delay and new policy.
+An explicitly paused animation stays paused. Timing uses a monotonic clock and
 cumulative deadlines, not `now + delay` after every late decode. Under load, late
 frames can be omitted from presentation, but their dependents are decoded in order.
 GPU coverage is admitted atomically; a decoding/upload error retains the prior frame.
 Manual stepping may replay composition from the beginning, so it can take longer
-in a very long animation. No seeking, speed controls, editing or slideshow is provided.
+in a very long animation. No seeking, speed multipliers, editing or slideshow is provided.
 
 The pull-driven pipeline retains the displayed frame plus at most two normalized
 lookahead/candidate frames, never a growing list across loops. Within the 512 MiB
@@ -164,7 +179,7 @@ normal playback does not emit per-frame logs.
 
 ## Settings persistence
 
-Preload depth is loaded before the first folder admission from a human-readable
+Preload depth and animation rate are loaded before the first folder admission from a human-readable
 TOML file:
 
 - macOS: `$HOME/Library/Application Support/glance/settings.toml`
@@ -172,13 +187,16 @@ TOML file:
   otherwise `$HOME/.config/glance/settings.toml`
 - Windows: persistence is deferred; settings remain session-only.
 
-The stable key `preload-depth = 1` accepts integers 0 (Off) through 5. Unknown
+The stable key `preload-depth = 1` accepts integers 0 (Off) through 5.
+`animation-rate = "honor-file"` accepts `honor-file`, `exact`, `30-fps`, `24-fps`,
+`15-fps`, `10-fps`, or `off`. An unknown or invalid rate value falls back to
+`honor-file` without discarding a valid preload depth. Unknown
 keys are tolerated on load (not retained when saving); missing keys use defaults.
 Sort still remains session-only. Missing/malformed files or invalid depth values
 use depth 1 with a debug diagnostic, without a dialog. Missing or nonabsolute
 HOME disables persistence, including when XDG_CONFIG_HOME is present.
 
-Each depth change immediately updates preloading and synchronously writes a
+Each setting change immediately updates its policy and synchronously writes a
 unique temporary file in the same directory, flushes it, then atomically renames
 it over the settings file. Force-quit after a completed change preserves the
 choice; readers see either the old or the complete new file, never partial output.

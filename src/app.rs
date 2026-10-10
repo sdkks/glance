@@ -98,6 +98,7 @@ enum Command {
     Playback,
     NextFrame,
     Depth(usize),
+    Rate(crate::animation::Rate),
     Open,
     Navigate(Direction),
     Sort(Sort),
@@ -189,9 +190,20 @@ struct Playback {
     final_frame: bool,
     displayed_index: usize,
     candidate_index: usize,
+    resync: bool,
 }
 
 impl Playback {
+    fn set_rate(&mut self, encoded: std::time::Duration, rate: crate::animation::Rate) {
+        self.clock.set_rate(self.origin.elapsed(), encoded, rate);
+        // Invalidate work scheduled under the old policy; continue from the displayed
+        // position even if late-frame omission moved the decoder ahead of it.
+        self.worker.cancel();
+        self.waiting = false;
+        self.manual = false;
+        self.resync = true;
+    }
+
     fn new(
         version: FileVersion,
         context: egui::Context,
@@ -199,13 +211,17 @@ impl Playback {
     ) -> Result<Self, crate::decode::LoadError> {
         Ok(Self {
             worker: crate::animation::Worker::new(version, context)?,
-            clock: crate::animation::Clock::new(std::time::Duration::ZERO, duration),
+            clock: crate::animation::Clock::new(
+                std::time::Duration::ZERO,
+                crate::animation::Rate::default().interval(duration),
+            ),
             origin: std::time::Instant::now(),
             waiting: false,
             manual: false,
             final_frame: false,
             displayed_index: 0,
             candidate_index: 0,
+            resync: false,
         })
     }
 }
@@ -516,7 +532,14 @@ impl Viewer {
                 && let Some(version) = self.displayed_version.clone()
             {
                 match Playback::new(version, self.context.clone(), duration) {
-                    Ok(playback) => self.animation = Some(playback),
+                    Ok(mut playback) => {
+                        playback.clock.set_rate(
+                            std::time::Duration::ZERO,
+                            duration,
+                            self.settings.animation_rate,
+                        );
+                        self.animation = Some(playback);
+                    }
                     Err(error) => self.display.fail(error.to_string()),
                 }
             }
@@ -540,12 +563,36 @@ impl Viewer {
         }
     }
 
+    fn set_animation_rate(&mut self, rate: crate::animation::Rate) {
+        if self.settings.animation_rate == rate {
+            return;
+        }
+        self.settings.animation_rate = rate;
+        self.settings_store.save(self.settings);
+        if let Some(playback) = &mut self.animation
+            && let Some(encoded) = self
+                .display
+                .image
+                .as_ref()
+                .and_then(|image| image.pixels.animation_delay)
+        {
+            playback.set_rate(encoded, rate);
+            if self.pending_animation {
+                self.pending_animation = false;
+                self.pending_image = None;
+            }
+        }
+        self.context.request_repaint();
+    }
+
     fn tick_animation(&mut self, ctx: &egui::Context) {
         let Some(playback) = &mut self.animation else {
             return;
         };
         let now = playback.origin.elapsed();
-        if playback.clock.paused && !playback.manual {
+        if (playback.clock.paused || playback.clock.rate == crate::animation::Rate::Off)
+            && !playback.manual
+        {
             return;
         }
         if self.pending_animation {
@@ -565,10 +612,12 @@ impl Viewer {
                     return;
                 }
                 Ok(Some(frame)) => {
-                    let duration = frame
-                        .pixels
-                        .animation_delay
-                        .expect("animation frame timing");
+                    let duration = playback.clock.rate.interval(
+                        frame
+                            .pixels
+                            .animation_delay
+                            .expect("animation frame timing"),
+                    );
                     let skip = if playback.manual {
                         playback.clock.stepped(duration);
                         false
@@ -602,7 +651,10 @@ impl Viewer {
         }
         if !playback.waiting && playback.clock.due(now) {
             playback.waiting = true;
-            playback.worker.advance(None);
+            playback
+                .worker
+                .advance(playback.resync.then_some(playback.displayed_index));
+            playback.resync = false;
         }
         if !playback.waiting {
             ctx.request_repaint_after(playback.clock.deadline.saturating_sub(now));
@@ -835,17 +887,28 @@ impl Viewer {
         });
         ui.menu_button("Playback", |ui| {
             ui.add_enabled_ui(self.animation.is_some(), |ui| {
-                let paused = self.animation.as_ref().is_some_and(|p| p.clock.paused);
-                menu_command(
-                    ui,
-                    if paused { "Resume  P" } else { "Pause  P" },
-                    Command::Playback,
-                    command,
+                let paused = self
+                    .animation
+                    .as_ref()
+                    .is_some_and(|p| p.clock.paused || p.clock.rate == crate::animation::Rate::Off);
+                ui.add_enabled_ui(
+                    self.settings.animation_rate != crate::animation::Rate::Off,
+                    |ui| {
+                        menu_command(
+                            ui,
+                            if paused { "Resume  P" } else { "Pause  P" },
+                            Command::Playback,
+                            command,
+                        );
+                    },
                 );
                 menu_command(ui, "Next Frame  .", Command::NextFrame, command);
             });
         });
         ui.menu_button("Settings", |ui| {
+            ui.menu_button("Animation rate", |ui| {
+                animation_rate_menu(ui, self.settings.animation_rate, command);
+            });
             ui.menu_button("Preload depth", |ui| {
                 for depth in 0..=5 {
                     let label = if depth == 0 {
@@ -902,6 +965,27 @@ fn keyboard_command(ctx: &egui::Context) -> Option<Command> {
         command = Some(Command::Zoom(1.25));
     }
     command
+}
+
+fn animation_rate_options(
+    active: crate::animation::Rate,
+) -> impl Iterator<Item = (crate::animation::Rate, &'static str, bool)> {
+    crate::animation::Rate::ALL
+        .into_iter()
+        .map(move |(rate, label, _)| (rate, label, active == rate))
+}
+
+fn animation_rate_menu(
+    ui: &mut egui::Ui,
+    active: crate::animation::Rate,
+    command: &mut Option<Command>,
+) {
+    for (rate, label, selected) in animation_rate_options(active) {
+        if ui.radio(selected, label).clicked() {
+            *command = Some(Command::Rate(rate));
+            ui.close();
+        }
+    }
 }
 
 fn menu_command(ui: &mut egui::Ui, label: &str, action: Command, command: &mut Option<Command>) {
@@ -1169,8 +1253,12 @@ impl eframe::App for Viewer {
                     self.stop_prefetch();
                 }
             }
+            Some(Command::Rate(rate)) => self.set_animation_rate(rate),
             Some(Command::Playback) => {
                 if let Some(playback) = &mut self.animation {
+                    if playback.clock.rate == crate::animation::Rate::Off {
+                        return;
+                    }
                     playback.clock.toggle(playback.origin.elapsed());
                     ctx.request_repaint();
                     // Pause holds an uncommitted candidate without changing the displayed frame.
@@ -1181,6 +1269,7 @@ impl eframe::App for Viewer {
                 if let Some(playback) = &mut self.animation {
                     playback.clock.step();
                     playback.manual = true;
+                    playback.resync = false;
                     ctx.request_repaint();
                     playback.waiting = true;
                     self.pending_image = None;
@@ -1211,6 +1300,39 @@ impl eframe::App for Viewer {
 mod tests {
     use super::*;
     use crate::{decode::LoadError, folder::tests::TempDir};
+
+    #[test]
+    fn rate_menu_has_one_active_option_and_selects_via_keyboard() {
+        for (active, _, _) in crate::animation::Rate::ALL {
+            let options: Vec<_> = animation_rate_options(active).collect();
+            assert_eq!(options.len(), 7);
+            assert_eq!(options.iter().filter(|option| option.2).count(), 1);
+            assert!(options.iter().any(|option| option.0 == active && option.2));
+        }
+        let ctx = egui::Context::default();
+        let mut command = None;
+        let mut output = ctx.run_ui(egui::RawInput::default(), |ui| {
+            animation_rate_menu(ui, crate::animation::Rate::Exact, &mut command);
+        });
+        output.textures_delta.clear();
+        assert!(command.is_none());
+        for key in [Key::Tab, Key::Enter] {
+            let mut output = ctx.run_ui(
+                egui::RawInput {
+                    events: vec![key_event(key, false)],
+                    ..Default::default()
+                },
+                |ui| {
+                    animation_rate_menu(ui, crate::animation::Rate::Exact, &mut command);
+                },
+            );
+            output.textures_delta.clear();
+        }
+        assert!(matches!(
+            command,
+            Some(Command::Rate(crate::animation::Rate::HonorFile))
+        ));
+    }
 
     #[test]
     fn animation_shortcuts_and_same_path_frame_swaps_preserve_view_and_copy() {
@@ -2017,8 +2139,26 @@ mod tests {
         );
         assert!(!viewer.pending_animation);
         // The same construction seam used on successful admission never inherits pause.
-        let restarted = Playback::new(version, viewer.context.clone(), duration).unwrap();
+        let mut restarted = Playback::new(version, viewer.context.clone(), duration).unwrap();
         assert!(!restarted.clock.paused);
         assert_eq!(restarted.displayed_index, 0);
+        restarted.displayed_index = 2;
+        restarted.waiting = true;
+        restarted.set_rate(duration, crate::animation::Rate::Fps10);
+        let deadline = restarted.clock.deadline;
+        assert!(deadline >= std::time::Duration::from_millis(100));
+        assert!(deadline <= restarted.origin.elapsed() + std::time::Duration::from_millis(100));
+        assert_eq!(
+            restarted.displayed_index, 2,
+            "live change does not reset position"
+        );
+        assert!(!restarted.waiting);
+        assert!(restarted.resync);
+        restarted.set_rate(duration, crate::animation::Rate::Off);
+        assert!(!restarted.clock.due(std::time::Duration::MAX));
+        assert_eq!(
+            restarted.displayed_index, 2,
+            "Off holds current composed frame"
+        );
     }
 }

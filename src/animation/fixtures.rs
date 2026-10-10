@@ -242,11 +242,42 @@ fn gif_encoded_centisecond_timing_matrix() {
         let frame = stream.next().unwrap().unwrap();
         assert_eq!(
             frame.animation_delay,
-            Some(Duration::from_millis(ms)),
-            "{cs} cs"
+            Some(Duration::from_millis(u64::from(cs) * 10)),
+            "raw {cs} cs"
+        );
+        assert_eq!(
+            Rate::default().interval(frame.animation_delay.unwrap()),
+            Duration::from_millis(ms)
         );
     }
     assert!(stream.next().unwrap().is_none());
+}
+
+#[test]
+fn off_keeps_first_frame_and_manual_steps_still_compose() {
+    let dir = TempDir::new();
+    for (ext, bytes) in [("gif", gif(None)), ("png", apng(0)), ("webp", webp(0))] {
+        let path = dir.0.join(format!("off.{ext}"));
+        std::fs::write(&path, &bytes).unwrap();
+        let first = crate::decode::load(&path, 8192).unwrap();
+        let mut clock = Clock::new(Duration::ZERO, Duration::from_millis(30));
+        clock.set_rate(Duration::ZERO, first.animation_delay.unwrap(), Rate::Off);
+        assert!(!clock.due(Duration::from_secs(10000)));
+        assert_eq!(&first.rgba[..4], &[255, 0, 0, 255]);
+        let w = Worker::new(
+            crate::folder::FileVersion::read(&path).unwrap(),
+            eframe::egui::Context::default(),
+        )
+        .unwrap();
+        clock.step();
+        w.advance(Some(0)); // same displayed-index target as Next Frame
+        let frame = wait(&w).unwrap().unwrap();
+        assert_eq!(frame.index, 1);
+        assert_ne!(frame.pixels.rgba, first.rgba);
+        clock.stepped(Rate::Off.interval(frame.pixels.animation_delay.unwrap()));
+        assert!(clock.paused);
+        assert!(!clock.due(Duration::from_secs(20000)));
+    }
 }
 
 #[test]
@@ -395,6 +426,7 @@ fn early_terminal_error_cannot_be_erased_by_first_advance() {
     assert!(state.closed);
     drop(state);
     w.advance(None);
+    w.cancel(); // A live rate change must also preserve terminal errors.
     assert!(wait(&w).is_err());
 }
 
