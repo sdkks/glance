@@ -4,8 +4,9 @@ This development inventory records the exact Cargo.lock graph, including
 platform-specific/build/optional packages that may not enter the macOS binary.
 Source archives and checksums are pinned by Cargo.lock. License expressions below
 come from each resolved package manifest, not an assertion of blanket distribution
-clearance. No GPL qView code/assets, native codec provisioning, or modified upstream
-source is included. Direct dependencies: eframe 0.36.2 (MIT OR Apache-2.0), image
+clearance. No GPL qView code/assets or modified upstream
+source is included. AVIF development builds discover native codecs as described below.
+Direct dependencies: eframe 0.36.2 (MIT OR Apache-2.0), image
 0.25.10 (MIT OR Apache-2.0), rfd 0.17.2 (MIT), arboard 3.6.1 (MIT OR Apache-2.0),
 and macOS-only objc2 0.6.5 (MIT), objc2-app-kit 0.3.2 (Zlib OR Apache-2.0 OR MIT),
 objc2-foundation 0.3.2 (MIT), moxcms 0.8.1 (BSD-3-Clause OR Apache-2.0), and
@@ -389,3 +390,88 @@ increment's manifest. Package source URLs below identify exact registry versions
 | zlib-rs | 0.6.8 | Zlib | https://crates.io/crates/zlib-rs/0.6.8 |
 | zune-core | 0.5.3 | MIT OR Apache-2.0 OR Zlib | https://crates.io/crates/zune-core/0.5.3 |
 | zune-jpeg | 0.5.15 | MIT OR Apache-2.0 OR Zlib | https://crates.io/crates/zune-jpeg/0.5.15 |
+
+## JPEG XL still decoder additions
+
+Core jxl-oxide 0.12.6, default features disabled, moxcms enabled (no image adapter, no native JXL runtime). These new manifest declarations all offer a permissive license; preserve MIT/Apache notices as selected. No policy exceptions added. Original fixture assets/test/web/still.jxl was generated from the adjacent independently authored PPM with cjxl 0.10.2, lossless distance 0.
+
+| Crate | Version | Declared license | Source |
+| --- | --- | --- | --- |
+| alloc-no-stdlib | 2.0.4 | BSD-3-Clause | https://crates.io/crates/alloc-no-stdlib/2.0.4 |
+| alloc-stdlib | 0.2.4 | BSD-3-Clause | https://crates.io/crates/alloc-stdlib/0.2.4 |
+| brotli-decompressor | 5.0.3 | BSD-3-Clause/MIT | https://crates.io/crates/brotli-decompressor/5.0.3 |
+| jxl-bitstream | 1.1.0 | MIT OR Apache-2.0 | https://crates.io/crates/jxl-bitstream/1.1.0 |
+| jxl-coding | 1.0.1 | MIT OR Apache-2.0 | https://crates.io/crates/jxl-coding/1.0.1 |
+| jxl-color | 0.11.0 | MIT OR Apache-2.0 | https://crates.io/crates/jxl-color/0.11.0 |
+| jxl-frame | 0.13.3 | MIT OR Apache-2.0 | https://crates.io/crates/jxl-frame/0.13.3 |
+| jxl-grid | 0.6.2 | MIT OR Apache-2.0 | https://crates.io/crates/jxl-grid/0.6.2 |
+| jxl-image | 0.13.0 | MIT OR Apache-2.0 | https://crates.io/crates/jxl-image/0.13.0 |
+| jxl-jbr | 0.2.1 | MIT OR Apache-2.0 | https://crates.io/crates/jxl-jbr/0.2.1 |
+| jxl-modular | 0.11.3 | MIT OR Apache-2.0 | https://crates.io/crates/jxl-modular/0.11.3 |
+| jxl-oxide | 0.12.6 | MIT OR Apache-2.0 | https://crates.io/crates/jxl-oxide/0.12.6 |
+| jxl-oxide-common | 1.0.0 | MIT OR Apache-2.0 | https://crates.io/crates/jxl-oxide-common/1.0.0 |
+| jxl-render | 0.12.4 | MIT OR Apache-2.0 | https://crates.io/crates/jxl-render/0.12.4 |
+| jxl-threadpool | 1.0.0 | MIT OR Apache-2.0 | https://crates.io/crates/jxl-threadpool/1.0.0 |
+| jxl-vardct | 0.11.1 | MIT OR Apache-2.0 | https://crates.io/crates/jxl-vardct/0.11.1 |
+
+## Static SVG additions
+
+Direct resvg 0.48.0 (text, system-fonts, raster-images; defaults disabled), reexported usvg 0.48.1 and tiny-skia 0.12.0; roxmltree 0.21.1 validates unsupported active content; flate2 1.1.10 is promoted from the existing graph for bounded SVGZ expansion. System fonts are read from the host, not bundled. No new license exception. Preserve upstream notices for the selected permissive licenses.
+
+| Crate | Version | Declared license | Source |
+| --- | --- | --- | --- |
+| arrayref | 0.3.9 | BSD-2-Clause | https://crates.io/crates/arrayref/0.3.9 |
+| base64 | 0.23.1 | MIT OR Apache-2.0 | https://crates.io/crates/base64/0.23.1 |
+| data-url | 0.3.2 | MIT OR Apache-2.0 | https://crates.io/crates/data-url/0.3.2 |
+| float-cmp | 0.9.0 | MIT | https://crates.io/crates/float-cmp/0.9.0 |
+| fontconfig-parser | 0.5.8 | MIT | https://crates.io/crates/fontconfig-parser/0.5.8 |
+| fontdb | 0.24.0 | MIT | https://crates.io/crates/fontdb/0.24.0 |
+| imagesize | 0.15.0 | MIT | https://crates.io/crates/imagesize/0.15.0 |
+| pico-args | 0.5.0 | MIT | https://crates.io/crates/pico-args/0.5.0 |
+| resvg | 0.48.0 | Apache-2.0 OR MIT | https://crates.io/crates/resvg/0.48.0 |
+| rgb | 0.8.53 | MIT | https://crates.io/crates/rgb/0.8.53 |
+| roxmltree | 0.20.0 | MIT OR Apache-2.0 | https://crates.io/crates/roxmltree/0.20.0 |
+| roxmltree | 0.21.1 | MIT OR Apache-2.0 | https://crates.io/crates/roxmltree/0.21.1 |
+| simplecss | 0.2.2 | Apache-2.0 OR MIT | https://crates.io/crates/simplecss/0.2.2 |
+| siphasher | 1.0.4 | MIT OR Apache-2.0 | https://crates.io/crates/siphasher/1.0.4 |
+| strict-num | 0.1.1 | MIT | https://crates.io/crates/strict-num/0.1.1 |
+| svgtypes | 0.16.1 | Apache-2.0 OR MIT | https://crates.io/crates/svgtypes/0.16.1 |
+| tiny-skia | 0.12.0 | BSD-3-Clause | https://crates.io/crates/tiny-skia/0.12.0 |
+| tiny-skia-path | 0.12.0 | BSD-3-Clause | https://crates.io/crates/tiny-skia-path/0.12.0 |
+| tinyvec | 1.13.3 | Zlib OR Apache-2.0 OR MIT | https://crates.io/crates/tinyvec/1.13.3 |
+| unicode-bidi | 0.3.18 | MIT OR Apache-2.0 | https://crates.io/crates/unicode-bidi/0.3.18 |
+| unicode-script | 0.5.8 | MIT OR Apache-2.0 | https://crates.io/crates/unicode-script/0.5.8 |
+| unicode-vo | 0.1.0 | MIT/Apache-2.0 | https://crates.io/crates/unicode-vo/0.1.0 |
+| usvg | 0.48.1 | Apache-2.0 OR MIT | https://crates.io/crates/usvg/0.48.1 |
+| xmlwriter | 0.1.0 | MIT | https://crates.io/crates/xmlwriter/0.1.0 |
+
+## Native AVIF development adapter
+
+Validated exact pkg-config versions: libavif 1.4.2 and dav1d 1.5.4 (Homebrew,
+macOS arm64). cc 1.7.0 and pkg-config 0.3.34 are now direct build dependencies
+(already resolved, both MIT OR Apache-2.0). A locally authored C shim is compiled
+against the installed header; no upstream source is patched or vendored.
+The adapter selects AVIF_CODEC_CHOICE_DAV1D, maxThreads 2, strict defaults,
+allowProgressive/allowIncremental off, ignoreXMP on, 16384 dimension and
+512 MiB / 8 pixel limits; YUV conversion uses avoidLibYUV and straight RGBA16.
+Only decoder/conversion/free/getter functions are used, never encoder APIs.
+
+libavif's core and obu.c carry BSD-2-Clause notices (Joe Drago; VideoLAN and
+dav1d authors). The installed dav1d public header carries BSD-2-Clause terms
+and copyright VideoLAN/dav1d authors and Two Orioles, LLC. Binary redistribution
+must reproduce the copyright, conditions and disclaimer for both, including
+the exact artifact's additional per-file notices. The installed libavif LICENSE
+also records optional IJG, contrib and Android build-tool notices; applicability
+must be determined from the actual packaged artifact, not this manifest.
+
+The development dylib links libaom and therefore libvmaf in addition to dav1d.
+This graph is NOT approved for shipping. Packaging must build/pin decoder-only
+libavif+dav1d with encoders, libyuv, libvmaf and libheif absent and gather the
+full native notice bundle. This work does not ship those Homebrew libraries.
+The decoder is native in-process code; Rust unwind containment is not native
+fault containment. No distribution clearance or Linux certification is claimed.
+
+Original alpha.png is an independently generated 5×3 16-bit RGBA constant RGB
+(32768,16384,8192), with a five-step alpha ramp. alpha8/10/12.avif were encoded
+with avifenc 1.4.2, --lossless -d 8/10/12 -y 444 --cicp 1/13/0. The fixture
+encoder is a developer tool, not a new runtime dependency.

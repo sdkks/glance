@@ -15,6 +15,10 @@ pub enum Format {
     Xpm,
     Pcx,
     Sgi,
+    Jxl,
+    Svg,
+    Svgz,
+    Avif,
 }
 
 pub fn format(path: &Path) -> Option<Format> {
@@ -35,6 +39,10 @@ pub fn format(path: &Path) -> Option<Format> {
         b"xbm" => Format::Xbm,
         b"xpm" => Format::Xpm,
         b"pcx" => Format::Pcx,
+        b"avif" => Format::Avif,
+        b"svg" => Format::Svg,
+        b"svgz" => Format::Svgz,
+        b"jxl" => Format::Jxl,
         b"sgi" | b"bw" | b"rgb" | b"rgba" => Format::Sgi,
         _ => return None,
     })
@@ -61,6 +69,21 @@ pub fn decoder(
         Format::Xbm => Box::new(image_extras::xbm::XbmDecoder::new(cursor)?),
         Format::Xpm => Box::new(image_extras::xpm::XpmDecoder::new(cursor)?),
         Format::Pcx => Box::new(image_extras::pcx::PCXDecoder::new(cursor)?),
+        Format::Avif => {
+            return Err(LoadError::UnsupportedVariant(
+                "AVIF: use native decoder".into(),
+            ));
+        }
+        Format::Svg | Format::Svgz => {
+            return Err(LoadError::UnsupportedVariant(
+                "SVG: use static renderer".into(),
+            ));
+        }
+        Format::Jxl => {
+            return Err(LoadError::UnsupportedVariant(
+                "JXL: use core decoder".into(),
+            ));
+        }
         Format::Sgi => Box::new(image_extras::sgi::SgiDecoder::new(cursor)?),
     };
     decoder.set_limits(limits)?;

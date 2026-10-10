@@ -6,11 +6,23 @@ rust-version = "1.97.1"
 license = "MIT"
 description = "An independently authored, image-first desktop viewer"
 
+[features]
+default = ["avif-native"]
+avif-native = []
+
+[build-dependencies]
+cc = "=1.7.0"
+pkg-config = "=0.3.34"
+
 [dependencies]
 arboard = "=3.6.1"
 eframe = { version = "=0.36.2", default-features = false, features = ["default_fonts", "wgpu", "wayland", "x11"] }
 image = { version = "=0.25.10", default-features = false, features = ["jpeg", "png", "tiff", "bmp", "ico", "tga", "pnm", "gif", "webp"] }
 image-extras = { version = "=0.1.1", default-features = false, features = ["icns", "wbmp", "xbm", "xpm", "pcx", "sgi"] }
+resvg = { version = "=0.48.0", default-features = false, features = ["text", "system-fonts", "raster-images"] }
+flate2 = "=1.1.10"
+roxmltree = "=0.21.1"
+jxl-oxide = { version = "=0.12.6", default-features = false, features = ["moxcms"] }
 moxcms = "=0.8.1"
 half = "=2.7.1"
 rfd = "=0.17.2"

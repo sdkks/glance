@@ -169,9 +169,8 @@ synchronous decoder work may finish, but cannot publish into a replaced playback
 Prefetch keeps only the first composed frame; history never retains played frames
 or running decoders. Changing preload depth or sort does not start neighbor playback.
 
-AVIF and JXL sequences are explicitly deferred until their static codecs exist.
-Their sequence timing adapters will follow those codecs; neither sequence playback
-nor static support for those formats is claimed here. 16-bit APNG playback is not
+AVIF and JXL sequences remain deferred; still support is described below.
+16-bit APNG playback is not
 supported; static 16-bit PNG is unchanged. Visual playback and pause/step feel still
 require a human desktop check. For release smoke diagnostics, set
 `GLANCE_TRACE_ANIMATION=1` to log each fully admitted animation frame to stderr;
@@ -324,6 +323,68 @@ construction, metadata and pixel decode and returns a named malformed-image erro
 The default panic hook may still print a diagnostic. This boundary does not catch
 allocator aborts, process aborts or memory-safety failures. Encoded reads and output
 sizes remain bounded; upstream scratch-allocation limits remain best-effort.
+
+## Web and vector formats
+
+JPEG XL (`jxl`) stills use pinned `jxl-oxide` 0.12.6's core API (not its image
+adapter), with moxcms enabled and no native JXL runtime. The codec converts to
+encoded sRGB with relative-colorimetric intent and applies stream orientation
+once; Glance does not rotate it again or reapply the original ICC. Output is
+quantized to full-range U16 even for 8-bit sources, then uses the existing U16
+levels, tiles and 8-bit clipboard conversion. This is not lossless preservation
+of arbitrary float/greater-than-16-bit source samples. HDR transfer, CMYK and
+animation/sequence profiles give named unsupported-variant errors. Decoder
+tracked allocations are capped at 512 MiB; upstream untracked scratch is not
+an RSS guarantee. The original test fixture is a constant 3×2 PPM encoded
+losslessly by cjxl 0.10.2; no borrowed image assets are used.
+
+SVG/SVGZ (`svg`, `svgz`) use resvg 0.48.0 / usvg 0.48.1 / tiny-skia 0.12.0
+for static shapes, text (system fonts), and bounded embedded JPEG/PNG/GIF/WebP.
+Scripts/events, animation, foreignObject, nested SVG and external image files
+are rejected by name; there is no network or local-file resource resolver.
+Each embedded raster is limited to 4096 pixels per side and 64 MiB RGBA;
+expanded gzip XML is limited to 64 MiB. Nested raster ICC is not normalized by
+this path. Relative sizes use usvg's default viewport (100×100) and SVG viewBox
+rules, not a browser viewport. This increment rasterizes once at intrinsic size
+(on the loader worker), keeps straight U8 plus ordinary rendering levels, and
+copies that intrinsic-size bitmap. It does **not** retain the parsed tree or
+re-rasterize at zoom/DPI thresholds: enlargement is a raster preview and may
+pixelate. Scale-aware sharp vector zoom remains unfinished, not claimed here.
+
+## Native AVIF development builds
+
+AVIF (`avif`) stills use an owned header-compiled C shim over libavif, explicitly
+selecting the dav1d decoder (no encoder APIs; YUV conversion avoids libyuv).
+8/10/12-bit sources become full-range straight RGBA U16 and follow ordinary
+ICC normalization, U16 levels, transforms and clipboard conversion. Container
+rotation/mirror is applied once, with EXIF only as a fallback when neither is
+present. ICC is preferred; unsupported CICP RGB primaries/transfer combinations
+are disclosed as an sRGB assumption. PQ/HLG, sequences, clean aperture and
+non-square pixel aspect properties are named unsupported variants, not silently
+misrendered. Native decoding is in-process, not sandboxed.
+
+The default `avif-native` feature probes pkg-config on macOS/Linux. This adapter
+requires libavif ≥1.4.2 and dav1d ≥1.5.4. When absent, compilation succeeds with
+`AVIF support not built: libavif/dav1d not found` and opening AVIF reports the
+same named message. `cargo build --no-default-features` explicitly disables it.
+AVIF remains an eligible extension because the dispatch provides this specific
+unavailable-codec error. Header and library paths must describe the same ABI.
+
+```sh
+# macOS development dependencies
+brew install pkg-config libavif dav1d
+# Linux: repositories must provide the minimum versions above
+sudo apt install pkg-config libavif-dev libdav1d-dev
+```
+
+Validated development versions: Homebrew libavif 1.4.2 + dav1d 1.5.4, macOS
+arm64. The Homebrew libavif dylib also links aom/libvmaf: **this is not the shipping
+artifact**. Release packaging must provide/pin a decoder-only libavif+dav1d build,
+without encoders, libyuv, libvmaf or libheif, and collect exact native notices.
+This increment does not provision that artifact. Linux remains unverified.
+The three original analytic alpha fixtures are generated from `alpha.png` with
+avifenc 1.4.2, lossless, 4:4:4 identity matrix, depths 8/10/12; encoder tools are
+fixture-generation tools only, never linked by Glance's adapter.
 
 ## Current limits and remaining work
 
