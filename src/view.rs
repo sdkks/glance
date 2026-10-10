@@ -4,7 +4,7 @@ use eframe::egui::{Pos2, Rect, Vec2};
 pub const MIN_SCALE: f32 = 0.01;
 pub const MAX_SCALE: f32 = 500.0;
 
-#[derive(Default)]
+#[derive(Clone, Default)]
 pub struct View {
     // None follows fit dynamically on viewport/DPI changes; Some is physical pixel scale.
     scale: Option<f32>,

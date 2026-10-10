@@ -312,7 +312,8 @@ mod tests {
         assert!(!publish(&prefetch.shared, 1, |result| result.image =
             Some(Ok(Pixels {
                 size: [1, 1],
-                rgba: vec![0; 4]
+                rgba: vec![0; 4],
+                levels: vec![],
             }))));
         assert!(prefetch.shared.mailbox.lock().unwrap().pending.is_none());
         assert!(prefetch.take_completion().image.is_none());
@@ -331,6 +332,7 @@ mod tests {
         let ready = Arc::new(Ready::Pixels(Arc::new(Pixels {
             size: [1, 1],
             rgba: vec![42; 4],
+            levels: vec![],
         })));
         let loader = Loader {
             shared: Arc::new(shared()),
@@ -378,6 +380,7 @@ mod tests {
                 Ok(Pixels {
                     size: [1, 1],
                     rgba: vec![0; 4],
+                    levels: vec![],
                 })
             })
         });
@@ -420,6 +423,7 @@ mod tests {
                 image: Some(Ok(Pixels {
                     size: [1, 1],
                     rgba: vec![255; 4],
+                    levels: vec![],
                 })),
                 ..Default::default()
             };

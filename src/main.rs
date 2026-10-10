@@ -3,8 +3,10 @@ mod cache;
 mod decode;
 mod desktop;
 mod folder;
+mod levels;
 mod loader;
 mod render;
+mod tiles;
 mod transform;
 mod view;
 

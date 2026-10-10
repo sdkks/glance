@@ -51,6 +51,20 @@ impl<T> Display<T> {
         self.status = Status::Empty;
     }
 
+    fn finish_tiles(
+        &mut self,
+        generation: u64,
+        ready: T,
+        coverage: Option<crate::tiles::CoverageReady>,
+        path: Option<PathBuf>,
+        view: &mut View,
+    ) -> bool {
+        if coverage.is_none() {
+            return false;
+        }
+        self.finish(generation, Ok(ready), path, view)
+    }
+
     fn finish(
         &mut self,
         generation: u64,
@@ -97,6 +111,8 @@ enum Command {
 }
 
 pub struct Viewer {
+    pending_image: Option<(u64, Option<FileVersion>, Arc<Image>)>,
+    last_paint: Option<egui::PaintCallback>,
     prefetch: Option<Loader>,
     cache: Cache<Ready>,
     displayed_version: Option<FileVersion>,
@@ -139,6 +155,8 @@ impl Viewer {
             ),
         };
         let mut viewer = Self {
+            pending_image: None,
+            last_paint: None,
             prefetch,
             cache: Cache::default(),
             displayed_version: None,
@@ -184,6 +202,7 @@ impl Viewer {
     }
 
     fn request(&mut self, path: PathBuf, refresh: Option<(Folder, Option<Direction>)>) {
+        self.pending_image = None;
         self.stop_prefetch();
         let Some(generation) = self.display.generation.checked_add(1) else {
             self.display
@@ -237,6 +256,8 @@ impl Viewer {
                             self.display.loading();
                         } else {
                             self.display.clear();
+                            self.last_paint = None;
+                            self.pending_image = None;
                         }
                     }
                     if self
@@ -255,7 +276,6 @@ impl Viewer {
         }
         let ready = if let Some(resident) = result.resident {
             Some(match resident.as_ref() {
-                Ready::Resident(image) => Ok(Arc::clone(image)),
                 Ready::Pixels(pixels) => self.upload(Arc::clone(pixels)),
             })
         } else {
@@ -266,7 +286,13 @@ impl Viewer {
             })
         };
         if let Some(ready) = ready {
-            self.commit_ready(result.generation, result.version, ready);
+            match ready {
+                Ok(image) => self.pending_image = Some((result.generation, result.version, image)),
+                Err(error) => {
+                    self.display.fail(error);
+                    self.pending_image = None;
+                }
+            }
         } else if matches!(self.display.status, Status::Ready) {
             self.start_prefetch();
         }
@@ -283,7 +309,8 @@ impl Viewer {
         &mut self,
         generation: u64,
         version: Option<FileVersion>,
-        ready: Result<Arc<Image>, String>,
+        ready: Arc<Image>,
+        coverage: crate::tiles::CoverageReady,
     ) {
         let old = self
             .display
@@ -291,10 +318,13 @@ impl Viewer {
             .clone()
             .zip(self.displayed_version.clone());
         // Cached and freshly uploaded residents share the atomic admission seam.
-        if self
-            .display
-            .finish(generation, ready, self.selected.clone(), &mut self.view)
-        {
+        if self.display.finish_tiles(
+            generation,
+            ready,
+            Some(coverage),
+            self.selected.clone(),
+            &mut self.view,
+        ) {
             let bytes = self.displayed_bytes();
             if let Some(version) = &version {
                 self.cache.admitted(version, bytes);
@@ -311,8 +341,8 @@ impl Viewer {
                     Entry {
                         version: old_version,
                         generation: self.displayed_generation,
-                        bytes: image.pixels.rgba.len(),
-                        value: Arc::new(Ready::Resident(image)),
+                        bytes: image.pixels.accounted_bytes(),
+                        value: Arc::new(Ready::Pixels(Arc::clone(&image.pixels))),
                         history: true,
                     },
                     bytes,
@@ -344,7 +374,7 @@ impl Viewer {
         self.display
             .image
             .as_ref()
-            .map_or(0, |image| image.pixels.rgba.len())
+            .map_or(0, |image| image.pixels.accounted_bytes())
     }
 
     fn stop_prefetch(&mut self) {
@@ -393,7 +423,7 @@ impl Viewer {
             && self.selected.as_ref() != Some(&version.path)
             && let Some(Ok(pixels)) = result.image
         {
-            let bytes = pixels.rgba.len();
+            let bytes = pixels.accounted_bytes();
             self.cache.insert(
                 Entry {
                     version,
@@ -678,6 +708,40 @@ impl eframe::App for Viewer {
                 response.context_menu(|ui| {
                     self.menus(ui, &mut command);
                 });
+                // Stage against the framing that will actually be committed. The
+                // previous image/view remain intact until every visible tile is ready.
+                if let Some((generation, version, image)) = self.pending_image.take()
+                    && generation == self.display.generation
+                {
+                    let mut candidate_view = self.view.clone();
+                    if self.display.path != self.selected {
+                        candidate_view.reset();
+                    }
+                    let size = candidate_view.transform.size(image.size);
+                    let ppp = ctx.pixels_per_point();
+                    let prepared = self
+                        .render_state
+                        .as_ref()
+                        .ok_or_else(|| "GPU renderer unavailable".to_owned())
+                        .and_then(|state| {
+                            image
+                                .callback(
+                                    state,
+                                    canvas,
+                                    candidate_view.rect(canvas, size, ppp),
+                                    candidate_view.transform,
+                                    candidate_view.scale(canvas, size, ppp),
+                                )
+                                .map_err(|e| e.to_string())
+                        });
+                    match prepared {
+                        Ok(paint) => {
+                            self.commit_ready(generation, version, image, paint.coverage);
+                            self.last_paint = Some(paint.paint);
+                        }
+                        Err(error) => self.display.fail(error),
+                    }
+                }
                 if let Some(image) = &self.display.image {
                     let mut size = self.view.transform.size(image.size);
                     let ppp = ctx.pixels_per_point();
@@ -738,12 +802,19 @@ impl eframe::App for Viewer {
                     if canvas.is_positive()
                         && let Some(state) = &self.render_state
                     {
-                        ui.painter().add(image.callback(
-                            &state.device,
+                        match image.callback(
+                            state,
                             canvas,
                             self.view.rect(canvas, size, ppp),
                             self.view.transform,
-                        ));
+                            self.view.scale(canvas, size, ppp),
+                        ) {
+                            Ok(paint) => self.last_paint = Some(paint.paint),
+                            Err(error) => self.action_error = Some(error.to_string()),
+                        }
+                        if let Some(paint) = &self.last_paint {
+                            ui.painter().add(paint.clone());
+                        }
                     }
                 } else {
                     let path = self.selected.as_deref().unwrap_or(std::path::Path::new(""));
@@ -845,6 +916,28 @@ mod tests {
                 std::fs::write(&path, b"identity").unwrap();
             }
         }
+    }
+
+    #[test]
+    fn partial_tile_staging_cannot_commit_or_reset_the_prior() {
+        let keys = crate::tiles::coverage([150, 100], 0, 62, [0.0, 0.0, 1.0, 1.0]);
+        let mut display = Display::new(Status::Empty);
+        let mut view = View::default();
+        display.finish(0, Ok("prior"), None, &mut view);
+        view.actual_size();
+        display.generation = 1;
+        display.loading();
+        for count in 0..keys.len() {
+            let coverage = crate::tiles::ready(&keys, |key| keys[..count].contains(key));
+            assert!(!display.finish_tiles(1, "partial", coverage, None, &mut view));
+            assert_eq!(display.image, Some("prior"));
+            assert!(matches!(display.status, Status::Loading));
+            let canvas = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(100.0, 100.0));
+            assert_eq!(view.scale(canvas, [150, 100], 1.0), 1.0);
+        }
+        let coverage = crate::tiles::ready(&keys, |_| true);
+        assert!(display.finish_tiles(1, "complete", coverage, None, &mut view));
+        assert_eq!(display.image, Some("complete"));
     }
 
     #[test]
@@ -984,6 +1077,8 @@ mod tests {
         let dir = TempDir::new();
         let path = dir.0.join("latest.png");
         let mut viewer = Viewer {
+            pending_image: None,
+            last_paint: None,
             prefetch: None,
             cache: Cache::default(),
             displayed_version: None,

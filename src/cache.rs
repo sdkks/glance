@@ -3,13 +3,11 @@ use std::{collections::VecDeque, path::PathBuf, sync::Arc};
 use crate::{
     decode::Pixels,
     folder::{FileVersion, Folder},
-    render::Image,
 };
 
-// Prefetch stays at the normalized boundary; only admitted history holds GPU residents.
+// Prefetch and history retain CPU source/levels, never inactive GPU residency.
 pub enum Ready {
     Pixels(Arc<Pixels>),
-    Resident(Arc<Image>),
 }
 
 pub const BASE_BUDGET: usize = 512 * 1024 * 1024;
@@ -152,6 +150,27 @@ mod tests {
             bytes,
             history,
         }
+    }
+
+    #[test]
+    fn source_and_all_levels_participate_in_cache_budget() {
+        let (_dir, folder) = fixture();
+        let rgba = vec![255; 16];
+        let pixels = Pixels {
+            size: [2, 2],
+            levels: crate::levels::generate([2, 2], &rgba).unwrap(),
+            rgba,
+        };
+        assert_eq!(pixels.accounted_bytes(), 36); // 16 straight + 16 base + 4 reduced.
+        let mut cache = Cache::default();
+        cache.insert(entry(&folder, 1, pixels.accounted_bytes(), false), 36);
+        cache.trim_to(36, 71);
+        assert!(cache.entries.is_empty());
+        cache.insert(entry(&folder, 1, pixels.accounted_bytes(), false), 36);
+        cache.trim_to(36, 72);
+        assert_eq!(cache.entries.len(), 1);
+        let thin = crate::levels::generate([1, 9], &[255; 36]).unwrap();
+        assert!(thin.iter().map(|l| l.rgba.len()).sum::<usize>() <= 72);
     }
 
     #[test]

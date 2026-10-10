@@ -96,7 +96,11 @@ impl Transform {
                 rgba[to..to + 4].copy_from_slice(&pixels.rgba[from..from + 4]);
             }
         }
-        Ok(Pixels { size, rgba })
+        Ok(Pixels {
+            size,
+            rgba,
+            levels: vec![],
+        })
     }
 }
 
@@ -107,6 +111,7 @@ mod tests {
         Pixels {
             size: [3, 2],
             rgba: (0..6).flat_map(|n| [n, n + 10, n + 20, n * 40]).collect(),
+            levels: vec![],
         }
     }
     fn labels(pixels: &Pixels) -> Vec<u8> {
@@ -224,14 +229,17 @@ mod tests {
             Pixels {
                 size: [usize::MAX, 2],
                 rgba: vec![],
+                levels: vec![],
             },
             Pixels {
                 size: [0, 2],
                 rgba: vec![],
+                levels: vec![],
             },
             Pixels {
                 size: [3, 2],
                 rgba: vec![0; 4],
+                levels: vec![],
             },
         ] {
             assert!(matches!(

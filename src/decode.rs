@@ -14,6 +14,13 @@ pub const MAX_DIMENSION: u32 = 16384;
 pub struct Pixels {
     pub size: [usize; 2],
     pub rgba: Vec<u8>,
+    pub levels: Vec<crate::levels::Level>,
+}
+
+impl Pixels {
+    pub fn accounted_bytes(&self) -> usize {
+        self.rgba.len() + self.levels.iter().map(|l| l.rgba.len()).sum::<usize>()
+    }
 }
 
 #[derive(Debug)]
@@ -22,6 +29,7 @@ pub enum LoadError {
     Malformed(String),
     Unsupported,
     ResourceLimit(String),
+    DisplayUnavailable(String),
 }
 
 impl fmt::Display for LoadError {
@@ -33,6 +41,7 @@ impl fmt::Display for LoadError {
                 f,
                 "Unsupported format. This version opens JPEG and PNG only."
             ),
+            Self::DisplayUnavailable(reason) => write!(f, "Display unavailable: {reason}"),
             Self::ResourceLimit(reason) => {
                 write!(f, "Image exceeds this version's resource limit: {reason}")
             }
@@ -56,7 +65,7 @@ impl From<ImageError> for LoadError {
     }
 }
 
-pub fn load(path: &Path, texture_limit: u32) -> Result<Pixels, LoadError> {
+pub fn load(path: &Path, _texture_limit: u32) -> Result<Pixels, LoadError> {
     let extension = path
         .extension()
         .map(|ext| ext.as_encoded_bytes())
@@ -82,7 +91,7 @@ pub fn load(path: &Path, texture_limit: u32) -> Result<Pixels, LoadError> {
             "encoded input exceeds 64 MiB".into(),
         ));
     }
-    let dimension_limit = texture_limit.min(MAX_DIMENSION);
+    let dimension_limit = MAX_DIMENSION;
     let mut limits = Limits::default();
     limits.max_image_width = Some(dimension_limit);
     limits.max_image_height = Some(dimension_limit);
@@ -109,10 +118,9 @@ pub fn load(path: &Path, texture_limit: u32) -> Result<Pixels, LoadError> {
     } else {
         checked_size(rgba.width(), rgba.height(), dimension_limit)?
     };
-    Ok(Pixels {
-        size,
-        rgba: rgba.into_raw(),
-    })
+    let rgba = rgba.into_raw();
+    let levels = crate::levels::generate(size, &rgba)?;
+    Ok(Pixels { size, rgba, levels })
 }
 
 fn checked_size(width: u32, height: u32, dimension_limit: u32) -> Result<[usize; 2], LoadError> {
@@ -205,9 +213,6 @@ mod tests {
         image::RgbImage::new(3, 2)
             .save(dir.0.join("wide.png"))
             .unwrap();
-        assert!(matches!(
-            load(&dir.0.join("wide.png"), 2),
-            Err(LoadError::ResourceLimit(_))
-        ));
+        assert_eq!(load(&dir.0.join("wide.png"), 2).unwrap().size, [3, 2]);
     }
 }

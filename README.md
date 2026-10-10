@@ -68,21 +68,23 @@ repaint timer.
 **Settings → Preload depth** offers Off / 1 / 2 / 3 / 4 / 5, with an active radio
 indicator. Default is 1; this is session-only and writes no configuration. Once a
 selection settles, up to N images ahead and behind are decoded into the same
-oriented RGBA8 pixels used by foreground loads. Prefetch stays CPU-only until
-admission: a hit skips decoding but still uploads its texture through the ordinary
-atomic swap. Up to N recently admitted images retain their CPU pixels and GPU
-resident, so history hits skip both decode and upload. View transforms still reset
-on a different-file admission; history does not preserve per-file view state.
-Off stops prefetch and releases cached residents immediately.
+oriented RGBA8 source and rendering levels used by foreground loads. Prefetch stays
+CPU-only until admission: a hit skips decoding but stages visible tiles through
+the ordinary atomic swap. Up to N recently admitted images retain CPU sources
+and levels, **not inactive GPU textures**. History hits therefore skip decode and
+level generation, but reupload visible tiles. View transforms still reset on a
+different-file admission; history does not preserve per-file view state.
+Off stops prefetch and releases cached entries immediately.
 
 At most 2N cached entries plus the displayed image are retained (history and
-neighbors share those slots). Their combined logical RGBA8 byte budget is
-**max(512 MiB, twice the largest image admitted in this folder)**. Oldest history
-is evicted first, then oldest prefetch; the displayed image is never an eviction
-candidate. History recency changes on admission, not background decoding. This
-accounts each shared pixel payload once. History/display textures require up to
-another RGBA8-sized allocation each, so their CPU+GPU payload bound is at most
-twice the logical budget (at most 2 GiB with the existing per-image limit).
+neighbors share those slots). Their combined accounted CPU byte budget is
+**max(512 MiB, twice the largest image admitted in this folder)**. The formula
+is unchanged; an entry now counts its straight source **plus every retained
+rendering level, including the premultiplied base**, rather than the source alone.
+Oldest history is evicted first, then oldest prefetch; the displayed image is never
+an eviction candidate. History recency changes on admission, not background
+decoding. Shared immutable payloads count once; history entries have no GPU tiles
+to account. GPU residency and transient gutter buffers are bounded separately below.
 
 One in-flight decode/result per worker, encoded input, decoder/conversion scratch,
 GPU staging and clipboard copies are **additional bounded/transient allocations**,
@@ -135,27 +137,77 @@ native file-reference round trips, Finder selection, and transform/input feel.
 ## Current limits and remaining work
 
 Input reads are bounded at 64 MiB. Decoder output and RGBA8 output are each bounded
-at 512 MiB; sides are limited to the smaller of 16384 pixels and the device's
-texture limit. `image::Limits` explicitly bounds dimensions and requests a
+at 512 MiB; sides are limited to 16384 pixels, **independently of the GPU's
+single-texture limit**. `image::Limits` explicitly bounds dimensions and requests a
 512 MiB decoder allocation cap; the allocation cap is best-effort upstream,
 not a total process-RSS guarantee. Input, decode/conversion, UI texture staging,
-and GPU/native allocations may coexist. The displayed resident now retains its
-oriented CPU RGBA8 pixels for Copy Image in addition to the GPU texture. Transitions
-may retain two CPU/GPU residents alongside decoding/upload staging, not a total
-512 MiB budget. Copy Image allocates another full RGBA8 bitmap, checked against the
+and GPU/native allocations may coexist. The displayed resident retains its
+oriented straight CPU RGBA8 pixels for Copy Image alongside rendering levels.
+Transitions retain the previous image while preparing the next visible tile set,
+not a total 512 MiB budget. Copy Image allocates another full RGBA8 bitmap, checked against the
 same 512 MiB per-buffer limit with a fallible allocation; native clipboard encoding
 may allocate further buffers. Failure is named, never a reduced-size copy. Two workers with bounded pending/result
-slots prevent growth per keypress; the resident cache envelope is described above. These interim calibration values were raised
-after real 38MP content was rejected; the full-detail presentation envelope
-(including tiling and high-depth support) remains future work.
+slots prevent growth per keypress; the resident cache envelope is described above.
+These calibration values were raised after real 38MP content was rejected.
 
-Embedded orientation is applied once. Presentation currently uses an image-only
-wgpu paint callback with an sRGB RGBA8 texture and linear sampling. Transparency
-is composited over the dark canvas in linear light, and output encoding follows
-the actual attachment format. This interim straight-alpha filtering path does
-not yet claim halo-free strong minification. Deliberate ICC/SDR conversion,
-high-depth presentation, mipmaps, and oversized-image tiling are **not implemented
-yet**. Other formats (including explicitly deferred XCF) give an unsupported-format
+## Rendering: minification and full detail
+
+Loader workers generate a dyadic pyramid after embedded orientation/RGBA8 conversion,
+not on the UI thread. Each child side is `max(1, floor(parent_side / 2))`.
+A child pixel averages the complete parent box from `floor(i × parent / child)`
+to `floor((i + 1) × parent / child)` (exclusive), so odd-edge remainder texels
+are never dropped. Levels are generated globally before tiling, not independently
+at tile edges. All pyramid levels are retained to support arbitrary subsequent
+zoom without discarding native detail; no second pyramid or speculative variants
+are retained. Their total payload is bounded by twice the straight source bytes
+(including the premultiplied base; normally about 4/3 for two-dimensional images).
+
+**Premultiplication convention:** rendering RGB is premultiplied **in linear light**,
+then sRGB-encoded into RGBA8; alpha is linear. Hardware sRGB texture sampling
+linearizes RGB before filtering. Generation decodes the same convention before
+averaging; the shader blends already-premultiplied RGB and composites over the
+dark canvas without multiplying alpha a second time. The straight source is kept
+separately for Copy Image. This is still an 8-bit presentation boundary, not an
+ICC/high-depth normalization implementation. Checker averages have a declared
+linear-channel tolerance of 0.004 and premultiply/unpremultiply roundtrip tolerance
+of 0.006 for the unit reference patterns. Human photo/shimmer/halo checks remain
+necessary; these numerical checks are not a visual-quality certification.
+
+Fit/reduction blends the two neighboring levels using logarithmic physical-pixel
+scale and their actual dimension ratios (including odd and thin images). Actual
+Size and enlargement use the native base with nearest sampling for pixel inspection.
+The renderer queries `max_texture_dimension_2d` and uses interiors of at most
+1022 pixels per side, reduced further for small device limits, plus a one-texel
+filtering gutter on every side. Interior tiles partition the entire base and every
+level; edge gutters clamp only at the complete image boundary. Panning reuploads
+base tiles in any corner; a fit preview is never the only retained detail.
+
+Only visible tiles from the selected levels plus at most eight adjacent tiles per
+level are uploaded. GPU textures have a **128 MiB per-renderer LRU budget**;
+offscreen tiles are evicted first, and the complete current visible set is protected.
+A viewport whose mandatory visible set exceeds that budget reports a named resource
+error rather than displaying partial detail. CPU gutter buffers and queued uploads
+are bounded to **16 MiB**: each at-most-4-MiB upload is submitted and drained before
+the next. Device waits have a five-second failure timeout. Creation/upload validation,
+internal and allocation errors become `Display unavailable` errors. A failed load
+or staging operation retains the prior image and navigation. Replacement admission
+requires a complete-visible-coverage witness, never the first successful tile.
+
+A retained prior paint callback protects its textures on pan/upload failure. Allow
+up to **512 MiB of application-held GPU tile references** across current residency,
+prior paint, replacement staging and the outgoing frame; history never adds GPU
+residency. Driver-internal allocations and release timing are not a process-RSS
+promise. The straight source plus levels is bounded by **1.5 GiB per payload**;
+the dynamic resident CPU cache thus has a conservative **3 GiB** maximum. Each of
+the two bounded worker slots and an awaiting-admission replacement may additionally
+hold one such payload. Encoded input (64 MiB per worker), decoder/conversion scratch,
+clipboard output and backend allocations are separate transient costs. These are
+conservative application payload bounds, not a guaranteed total RSS ceiling.
+
+Embedded orientation is applied once. Output encoding follows the actual attachment
+format (hardware sRGB encoding or explicit OETF, never both). Deliberate ICC/SDR
+conversion and high-depth presentation are **not implemented yet**. Other formats
+(including explicitly deferred XCF) give an unsupported-format
 error. Animation, native menus/document-open
 integration, packaging and Linux desktop validation are later increments.
 Interactive zoom/pan feel and real input-device classification still need human

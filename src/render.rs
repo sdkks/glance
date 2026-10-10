@@ -1,88 +1,103 @@
-use std::sync::Arc;
-
+use crate::{
+    decode::{LoadError, Pixels},
+    levels,
+    tiles::{self, Key},
+    transform::Transform,
+};
 use eframe::{
     egui,
     egui_wgpu::{self, wgpu},
 };
+use std::{
+    collections::HashMap,
+    future::Future,
+    sync::{Arc, Mutex},
+    task::{Context, Poll, Waker},
+};
 use wgpu::util::DeviceExt;
 
-use crate::{
-    decode::{LoadError, Pixels},
-    transform::Transform,
-};
+pub struct Prepared {
+    pub paint: egui::PaintCallback,
+    pub coverage: tiles::CoverageReady,
+}
 
 pub struct Image {
     pub size: [usize; 2],
     pub pixels: Arc<Pixels>,
     pipeline: wgpu::RenderPipeline,
     layout: wgpu::BindGroupLayout,
+    linear: wgpu::Sampler,
+    nearest: wgpu::Sampler,
+    core: usize,
+    resident: Mutex<Residency>,
+}
+
+struct Resident {
     texture: wgpu::TextureView,
-    sampler: wgpu::Sampler,
+    bytes: usize,
+    age: u64,
+}
+#[derive(Default)]
+struct Residency {
+    tiles: HashMap<Key, Resident>,
+    clock: u64,
+}
+
+// Native wgpu resolves scoped creation/write errors synchronously. Never assume
+// success if an error future is pending (e.g. a different backend).
+fn checked<T>(
+    device: &wgpu::Device,
+    operation: impl FnOnce() -> Result<T, LoadError>,
+) -> Result<T, LoadError> {
+    let oom = device.push_error_scope(wgpu::ErrorFilter::OutOfMemory);
+    let internal = device.push_error_scope(wgpu::ErrorFilter::Internal);
+    let validation = device.push_error_scope(wgpu::ErrorFilter::Validation);
+    let result = operation();
+    let mut cx = Context::from_waker(Waker::noop());
+    let mut error = None;
+    for scope in [validation, internal, oom] {
+        let future = scope.pop();
+        match std::pin::pin!(future).as_mut().poll(&mut cx) {
+            Poll::Ready(None) => {}
+            Poll::Ready(Some(e)) => error = Some(e.to_string()),
+            Poll::Pending => error = Some("Device error check did not complete".into()),
+        }
+    }
+    if let Some(error) = error {
+        Err(LoadError::DisplayUnavailable(error))
+    } else {
+        result
+    }
 }
 
 impl Image {
+    // Only creates the renderer. The caller must stage visible coverage before
+    // admission; no texture-size rejection of a CPU-admitted image.
     pub fn upload(
         state: &egui_wgpu::RenderState,
         pixels: Arc<Pixels>,
     ) -> Result<Arc<Self>, LoadError> {
-        let width = u32::try_from(pixels.size[0])
-            .map_err(|_| LoadError::ResourceLimit("GPU width".into()))?;
-        let height = u32::try_from(pixels.size[1])
-            .map_err(|_| LoadError::ResourceLimit("GPU height".into()))?;
-        let row = width
-            .checked_mul(4)
-            .ok_or_else(|| LoadError::ResourceLimit("GPU stride".into()))?;
-        let bytes = usize::try_from(u64::from(row) * u64::from(height))
-            .map_err(|_| LoadError::ResourceLimit("GPU bytes".into()))?;
-        if width == 0
-            || height == 0
-            || pixels.rgba.len() != bytes
-            || width.max(height) > state.device.limits().max_texture_dimension_2d
-        {
-            return Err(LoadError::ResourceLimit(
-                "Invalid GPU image dimensions or payload".into(),
+        if pixels.levels.is_empty() {
+            return Err(LoadError::DisplayUnavailable(
+                "Missing normalized levels".into(),
             ));
         }
+        let core = tiles::core(state.device.limits().max_texture_dimension_2d)?;
         let device = &state.device;
-        let texture = device.create_texture(&wgpu::TextureDescriptor {
-            label: Some("image RGBA8"),
-            size: wgpu::Extent3d {
-                width,
-                height,
-                depth_or_array_layers: 1,
-            },
-            mip_level_count: 1,
-            sample_count: 1,
-            dimension: wgpu::TextureDimension::D2,
-            format: wgpu::TextureFormat::Rgba8UnormSrgb,
-            usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
-            view_formats: &[],
-        });
-        state.queue.write_texture(
-            texture.as_image_copy(),
-            &pixels.rgba,
-            wgpu::TexelCopyBufferLayout {
-                offset: 0,
-                bytes_per_row: Some(row),
-                rows_per_image: Some(height),
-            },
-            texture.size(),
-        );
-        let layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-            label: Some("image bindings"),
-            entries: &[
-                wgpu::BindGroupLayoutEntry {
-                    binding: 0,
-                    visibility: wgpu::ShaderStages::VERTEX,
-                    ty: wgpu::BindingType::Buffer {
-                        ty: wgpu::BufferBindingType::Uniform,
-                        has_dynamic_offset: false,
-                        min_binding_size: None,
-                    },
-                    count: None,
+        checked(device, || {
+            let mut entries = vec![wgpu::BindGroupLayoutEntry {
+                binding: 0,
+                visibility: wgpu::ShaderStages::VERTEX_FRAGMENT,
+                ty: wgpu::BindingType::Buffer {
+                    ty: wgpu::BufferBindingType::Uniform,
+                    has_dynamic_offset: false,
+                    min_binding_size: None,
                 },
-                wgpu::BindGroupLayoutEntry {
-                    binding: 1,
+                count: None,
+            }];
+            for binding in [1, 3] {
+                entries.push(wgpu::BindGroupLayoutEntry {
+                    binding,
                     visibility: wgpu::ShaderStages::FRAGMENT,
                     ty: wgpu::BindingType::Texture {
                         sample_type: wgpu::TextureSampleType::Float { filterable: true },
@@ -90,126 +105,367 @@ impl Image {
                         multisampled: false,
                     },
                     count: None,
+                });
+            }
+            entries.push(wgpu::BindGroupLayoutEntry {
+                binding: 2,
+                visibility: wgpu::ShaderStages::FRAGMENT,
+                ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                count: None,
+            });
+            let layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+                label: Some("image bindings"),
+                entries: &entries,
+            });
+            let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+                label: Some("image pipeline layout"),
+                bind_group_layouts: &[Some(&layout)],
+                immediate_size: 0,
+            });
+            let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+                label: Some("image shader"),
+                source: wgpu::ShaderSource::Wgsl(include_str!("image.wgsl").into()),
+            });
+            let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+                label: Some("tiled image pipeline"),
+                layout: Some(&pipeline_layout),
+                vertex: wgpu::VertexState {
+                    module: &shader,
+                    entry_point: Some("vertex"),
+                    buffers: &[],
+                    compilation_options: Default::default(),
                 },
-                wgpu::BindGroupLayoutEntry {
-                    binding: 2,
-                    visibility: wgpu::ShaderStages::FRAGMENT,
-                    ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
-                    count: None,
-                },
-            ],
-        });
-        let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-            label: Some("image pipeline layout"),
-            bind_group_layouts: &[Some(&layout)],
-            immediate_size: 0,
-        });
-        let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
-            label: Some("image shader"),
-            source: wgpu::ShaderSource::Wgsl(include_str!("image.wgsl").into()),
-        });
-        let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-            label: Some("image pipeline"),
-            layout: Some(&pipeline_layout),
-            vertex: wgpu::VertexState {
-                module: &shader,
-                entry_point: Some("vertex"),
-                buffers: &[],
-                compilation_options: Default::default(),
-            },
-            fragment: Some(wgpu::FragmentState {
-                module: &shader,
-                entry_point: Some(if state.target_format.is_srgb() {
-                    "linear"
-                } else {
-                    "encoded"
+                fragment: Some(wgpu::FragmentState {
+                    module: &shader,
+                    entry_point: Some(if state.target_format.is_srgb() {
+                        "linear"
+                    } else {
+                        "encoded"
+                    }),
+                    targets: &[Some(wgpu::ColorTargetState {
+                        format: state.target_format,
+                        blend: None,
+                        write_mask: wgpu::ColorWrites::ALL,
+                    })],
+                    compilation_options: Default::default(),
                 }),
-                targets: &[Some(wgpu::ColorTargetState {
-                    format: state.target_format,
-                    blend: None,
-                    write_mask: wgpu::ColorWrites::ALL,
-                })],
-                compilation_options: Default::default(),
-            }),
-            primitive: Default::default(),
-            depth_stencil: None,
-            multisample: Default::default(),
-            multiview_mask: None,
-            cache: None,
-        });
-        let sampler = device.create_sampler(&wgpu::SamplerDescriptor {
-            label: Some("image linear sampler"),
-            mag_filter: wgpu::FilterMode::Linear,
-            min_filter: wgpu::FilterMode::Linear,
-            ..Default::default()
-        });
-        Ok(Arc::new(Self {
-            size: pixels.size,
-            pixels,
-            pipeline,
-            layout,
-            texture: texture.create_view(&Default::default()),
-            sampler,
-        }))
+                primitive: Default::default(),
+                depth_stencil: None,
+                multisample: Default::default(),
+                multiview_mask: None,
+                cache: None,
+            });
+            let linear = device.create_sampler(&wgpu::SamplerDescriptor {
+                label: Some("reduction sampler"),
+                mag_filter: wgpu::FilterMode::Linear,
+                min_filter: wgpu::FilterMode::Linear,
+                ..Default::default()
+            });
+            let nearest = device.create_sampler(&wgpu::SamplerDescriptor {
+                label: Some("pixel inspection sampler"),
+                ..Default::default()
+            });
+            Ok(Arc::new(Self {
+                size: pixels.size,
+                pixels,
+                pipeline,
+                layout,
+                linear,
+                nearest,
+                core,
+                resident: Mutex::new(Residency::default()),
+            }))
+        })
+    }
+
+    fn stage(
+        &self,
+        state: &egui_wgpu::RenderState,
+        visible: &[Key],
+        adjacent: &[Key],
+    ) -> Result<tiles::CoverageReady, LoadError> {
+        let bytes =
+            |key: &Key| tiles::tile(self.pixels.levels[key.level].size, *key, self.core).bytes();
+        if visible.iter().map(bytes).sum::<usize>() > tiles::RESIDENT_BYTES {
+            return Err(LoadError::ResourceLimit(
+                "Visible GPU tiles exceed 128 MiB residency".into(),
+            ));
+        }
+        let mut cache = self.resident.lock().expect("GPU residency lock poisoned");
+        cache.clock = cache.clock.saturating_add(1);
+        let age = cache.clock;
+        for key in visible {
+            if let Some(tile) = cache.tiles.get_mut(key) {
+                tile.age = age;
+            }
+        }
+        let mut protected = visible.to_vec();
+        let mut required = visible.iter().map(bytes).sum::<usize>();
+        for key in adjacent {
+            if required + bytes(key) <= tiles::RESIDENT_BYTES {
+                protected.push(*key);
+                required += bytes(key);
+            }
+        }
+        for key in &protected {
+            if cache.tiles.contains_key(key) {
+                continue;
+            }
+            let needed = bytes(key);
+            while cache.tiles.values().map(|t| t.bytes).sum::<usize>() + needed
+                > tiles::RESIDENT_BYTES
+            {
+                let recency: Vec<_> = cache.tiles.iter().map(|(k, t)| (*k, t.age)).collect();
+                let victim = tiles::eviction(&recency, &protected)
+                    .ok_or_else(|| LoadError::ResourceLimit("GPU residency exhausted".into()))?;
+                cache.tiles.remove(&victim);
+            }
+            let level = &self.pixels.levels[key.level];
+            let tile = tiles::tile(level.size, *key, self.core);
+            let data = tiles::gutter(level, tile)?;
+            if data.len() > tiles::STAGING_BYTES {
+                return Err(LoadError::ResourceLimit(
+                    "GPU tile staging exceeds 16 MiB".into(),
+                ));
+            }
+            // Drain each bounded write before the next; driver staging cannot grow
+            // with all tiles across a frame. A failed tile never authorizes admission.
+            let texture = checked(&state.device, || {
+                let texture = state.device.create_texture(&wgpu::TextureDescriptor {
+                    label: Some("linear-premultiplied sRGB tile with gutter"),
+                    size: wgpu::Extent3d {
+                        width: (tile.size[0] + 2) as u32,
+                        height: (tile.size[1] + 2) as u32,
+                        depth_or_array_layers: 1,
+                    },
+                    mip_level_count: 1,
+                    sample_count: 1,
+                    dimension: wgpu::TextureDimension::D2,
+                    format: wgpu::TextureFormat::Rgba8UnormSrgb,
+                    usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+                    view_formats: &[],
+                });
+                state.queue.write_texture(
+                    texture.as_image_copy(),
+                    &data,
+                    wgpu::TexelCopyBufferLayout {
+                        offset: 0,
+                        bytes_per_row: Some((tile.size[0] + 2) as u32 * 4),
+                        rows_per_image: Some((tile.size[1] + 2) as u32),
+                    },
+                    texture.size(),
+                );
+                let submission = state.queue.submit([]);
+                state
+                    .device
+                    .poll(wgpu::PollType::Wait {
+                        submission_index: Some(submission),
+                        timeout: Some(std::time::Duration::from_secs(5)),
+                    })
+                    .map_err(|e| {
+                        LoadError::DisplayUnavailable(format!("Tile upload failed: {e}"))
+                    })?;
+                Ok(texture.create_view(&Default::default()))
+            })?;
+            cache.tiles.insert(
+                *key,
+                Resident {
+                    texture,
+                    bytes: needed,
+                    age,
+                },
+            );
+        }
+        tiles::ready(visible, |key| cache.tiles.contains_key(key))
+            .ok_or_else(|| LoadError::DisplayUnavailable("Visible tile staging incomplete".into()))
     }
 
     pub fn callback(
         self: &Arc<Self>,
-        device: &wgpu::Device,
+        state: &egui_wgpu::RenderState,
         canvas: egui::Rect,
         rect: egui::Rect,
         transform: Transform,
-    ) -> egui::PaintCallback {
-        let bounds = [
-            2.0 * (rect.left() - canvas.left()) / canvas.width() - 1.0,
-            1.0 - 2.0 * (rect.top() - canvas.top()) / canvas.height(),
-            2.0 * (rect.right() - canvas.left()) / canvas.width() - 1.0,
-            1.0 - 2.0 * (rect.bottom() - canvas.top()) / canvas.height(),
-        ];
-        let rows = transform.uv_rows();
-        let bytes: Vec<u8> = bounds
-            .iter()
-            .chain(rows.iter().flatten())
-            .flat_map(|n| n.to_ne_bytes())
-            .collect();
-        let buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some("image framing"),
-            contents: &bytes,
-            usage: wgpu::BufferUsages::UNIFORM,
-        });
-        let bindings = device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("image frame bindings"),
-            layout: &self.layout,
-            entries: &[
-                wgpu::BindGroupEntry {
-                    binding: 0,
-                    resource: buffer.as_entire_binding(),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 1,
-                    resource: wgpu::BindingResource::TextureView(&self.texture),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 2,
-                    resource: wgpu::BindingResource::Sampler(&self.sampler),
-                },
-            ],
-        });
-        egui_wgpu::Callback::new_paint_callback(
-            canvas,
-            Paint {
-                image: Arc::clone(self),
-                bindings,
-            },
-        )
+        physical_scale: f32,
+    ) -> Result<Prepared, LoadError> {
+        let (a, b, blend) = levels::select(&self.pixels.levels, physical_scale);
+        let visible = source_visible(canvas, rect, transform);
+        let first = tiles::coverage(self.pixels.levels[a].size, a, self.core, visible);
+        let second = if a == b {
+            first.clone()
+        } else {
+            tiles::coverage(self.pixels.levels[b].size, b, self.core, visible)
+        };
+        let mut keys = first.clone();
+        if a != b {
+            keys.extend(&second);
+        }
+        let mut adjacent = tiles::adjacent(self.pixels.levels[a].size, self.core, &first);
+        if a != b {
+            adjacent.extend(tiles::adjacent(
+                self.pixels.levels[b].size,
+                self.core,
+                &second,
+            ));
+        }
+        let coverage = self.stage(state, &keys, &adjacent)?;
+        checked(&state.device, || {
+            let cache = self.resident.lock().expect("GPU residency lock poisoned");
+            let mut bindings = Vec::new();
+            for ka in &first {
+                for kb in &second {
+                    if a == b && ka != kb {
+                        continue;
+                    }
+                    let ta = tiles::tile(self.pixels.levels[a].size, *ka, self.core);
+                    let tb = tiles::tile(self.pixels.levels[b].size, *kb, self.core);
+                    let Some(domain) = tiles::intersection(
+                        ta.domain(self.pixels.levels[a].size),
+                        tb.domain(self.pixels.levels[b].size),
+                    ) else {
+                        continue;
+                    };
+                    let screen = screen_domain(domain, rect, transform);
+                    let bounds = [
+                        2.0 * (screen.left() - canvas.left()) / canvas.width() - 1.0,
+                        1.0 - 2.0 * (screen.top() - canvas.top()) / canvas.height(),
+                        2.0 * (screen.right() - canvas.left()) / canvas.width() - 1.0,
+                        1.0 - 2.0 * (screen.bottom() - canvas.top()) / canvas.height(),
+                    ];
+                    let rows = |tile: tiles::Tile, size: [usize; 2]| -> [[f32; 4]; 2] {
+                        let inverse = transform.uv_rows();
+                        std::array::from_fn(|axis| {
+                            let extent = domain[axis + 2] - domain[axis];
+                            let scale = size[axis] as f32 / (tile.size[axis] + 2) as f32;
+                            [
+                                inverse[axis][0] * extent * scale,
+                                inverse[axis][1] * extent * scale,
+                                ((domain[axis] + inverse[axis][2] * extent) * size[axis] as f32
+                                    - tile.origin[axis] as f32
+                                    + 1.0)
+                                    / (tile.size[axis] + 2) as f32,
+                                0.0,
+                            ]
+                        })
+                    };
+                    let ra = rows(ta, self.pixels.levels[a].size);
+                    let rb = rows(tb, self.pixels.levels[b].size);
+                    let mix = [blend, 0.0, 0.0, 0.0];
+                    let bytes: Vec<u8> = bounds
+                        .iter()
+                        .chain(ra.iter().flatten())
+                        .chain(rb.iter().flatten())
+                        .chain(mix.iter())
+                        .flat_map(|n| n.to_ne_bytes())
+                        .collect();
+                    let buffer =
+                        state
+                            .device
+                            .create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                                label: Some("tile framing"),
+                                contents: &bytes,
+                                usage: wgpu::BufferUsages::UNIFORM,
+                            });
+                    bindings.push(state.device.create_bind_group(&wgpu::BindGroupDescriptor {
+                        label: Some("tile frame"),
+                        layout: &self.layout,
+                        entries: &[
+                            wgpu::BindGroupEntry {
+                                binding: 0,
+                                resource: buffer.as_entire_binding(),
+                            },
+                            wgpu::BindGroupEntry {
+                                binding: 1,
+                                resource: wgpu::BindingResource::TextureView(
+                                    &cache.tiles[ka].texture,
+                                ),
+                            },
+                            wgpu::BindGroupEntry {
+                                binding: 3,
+                                resource: wgpu::BindingResource::TextureView(
+                                    &cache.tiles[kb].texture,
+                                ),
+                            },
+                            wgpu::BindGroupEntry {
+                                binding: 2,
+                                resource: wgpu::BindingResource::Sampler(
+                                    if physical_scale >= 1.0 {
+                                        &self.nearest
+                                    } else {
+                                        &self.linear
+                                    },
+                                ),
+                            },
+                        ],
+                    }));
+                }
+            }
+            Ok(Prepared {
+                coverage,
+                paint: egui_wgpu::Callback::new_paint_callback(
+                    canvas,
+                    Paint {
+                        image: Arc::clone(self),
+                        bindings,
+                    },
+                ),
+            })
+        })
     }
+}
+
+fn source_visible(canvas: egui::Rect, rect: egui::Rect, transform: Transform) -> [f32; 4] {
+    let clipped = canvas.intersect(rect);
+    if !clipped.is_positive() {
+        return [0.0; 4];
+    }
+    let rows = transform.uv_rows();
+    let mut out = [
+        f32::INFINITY,
+        f32::INFINITY,
+        f32::NEG_INFINITY,
+        f32::NEG_INFINITY,
+    ];
+    for p in [
+        clipped.left_top(),
+        clipped.right_top(),
+        clipped.left_bottom(),
+        clipped.right_bottom(),
+    ] {
+        let uv = [
+            (p.x - rect.left()) / rect.width(),
+            (p.y - rect.top()) / rect.height(),
+        ];
+        for axis in 0..2 {
+            let v = rows[axis][0] * uv[0] + rows[axis][1] * uv[1] + rows[axis][2];
+            out[axis] = out[axis].min(v);
+            out[axis + 2] = out[axis + 2].max(v);
+        }
+    }
+    out
+}
+
+fn screen_domain(domain: [f32; 4], rect: egui::Rect, transform: Transform) -> egui::Rect {
+    let rows = transform.uv_rows();
+    let forward = |s: [f32; 2]| {
+        egui::pos2(
+            rect.left()
+                + rect.width()
+                    * (rows[0][0] * (s[0] - rows[0][2]) + rows[1][0] * (s[1] - rows[1][2])),
+            rect.top()
+                + rect.height()
+                    * (rows[0][1] * (s[0] - rows[0][2]) + rows[1][1] * (s[1] - rows[1][2])),
+        )
+    };
+    let a = forward([domain[0], domain[1]]);
+    let b = forward([domain[2], domain[3]]);
+    egui::Rect::from_min_max(a.min(b), a.max(b))
 }
 
 struct Paint {
     image: Arc<Image>,
-    bindings: wgpu::BindGroup,
+    bindings: Vec<wgpu::BindGroup>,
 }
-
 impl egui_wgpu::CallbackTrait for Paint {
     fn paint(
         &self,
@@ -218,8 +474,10 @@ impl egui_wgpu::CallbackTrait for Paint {
         _resources: &egui_wgpu::CallbackResources,
     ) {
         pass.set_pipeline(&self.image.pipeline);
-        pass.set_bind_group(0, &self.bindings, &[]);
-        pass.draw(0..6, 0..1);
+        for binding in &self.bindings {
+            pass.set_bind_group(0, binding, &[]);
+            pass.draw(0..6, 0..1);
+        }
     }
 }
 
@@ -230,5 +488,23 @@ mod tests {
     fn callback_obeys_wgpu_thread_contract() {
         fn assert_callback<T: egui_wgpu::CallbackTrait + Send + Sync>() {}
         assert_callback::<Paint>();
+    }
+    #[test]
+    fn transformed_clipped_coverage_matches_source_tile_domain() {
+        let rect = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1000.0, 600.0));
+        let domain = [0.7, 0.1, 0.9, 0.3];
+        let mut transform = Transform::default();
+        for op in [
+            crate::transform::Operation::Clockwise,
+            crate::transform::Operation::Mirror,
+            crate::transform::Operation::Flip,
+        ] {
+            transform.apply(op);
+            let screen = screen_domain(domain, rect, transform);
+            let recovered = source_visible(screen, rect, transform);
+            for i in 0..4 {
+                assert!((domain[i] - recovered[i]).abs() < 0.000001);
+            }
+        }
     }
 }
