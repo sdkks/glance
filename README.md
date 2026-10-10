@@ -38,7 +38,10 @@ physical screen pixel, including HiDPI. `+` (or `=`) and `−` zoom about the ca
 center. A line-unit mouse wheel zooms at the pointer, clamped to 0.01×–500×.
 Drag or two-axis point-unit trackpad scrolling pans when the image exceeds the
 viewport; scrolling never navigates. Ctrl/Command+scroll also zooms at the pointer.
-Fit and all zoom/pan state reset on file change. Menus are keyboard-accessible
+Fit and all zoom/pan state reset when the next image is ready to display, not on
+selection. During decode/upload the prior pixels and framing remain visible;
+the title marks the selected file Loading, or names its error if loading fails.
+A failed load keeps the prior image visible and navigation available. Menus are keyboard-accessible
 with Tab/Shift+Tab to focus and Enter/Space to activate; viewer shortcuts are
 suppressed while menus or another control own focus.
 
@@ -53,7 +56,7 @@ at 512 MiB; sides are limited to the smaller of 16384 pixels and the device's
 texture limit. `image::Limits` explicitly bounds dimensions and requests a
 512 MiB decoder allocation cap; the allocation cap is best-effort upstream,
 not a total process-RSS guarantee. Input, decode/conversion, UI texture staging,
-and GPU/native allocations may coexist. One worker and bounded pending/result
+and GPU/native allocations may coexist. Transitions retain the prior GPU image alongside the next decoded/uploaded image (two residents), not a total 512 MiB budget. One worker and bounded pending/result
 slots prevent growth per keypress. These interim calibration values were raised
 after real 38MP content was rejected; the full-detail presentation envelope
 (including tiling and high-depth support) remains future work.
