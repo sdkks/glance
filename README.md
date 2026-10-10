@@ -359,9 +359,20 @@ selecting the dav1d decoder (no encoder APIs; YUV conversion avoids libyuv).
 ICC normalization, U16 levels, transforms and clipboard conversion. Container
 rotation/mirror is applied once, with EXIF only as a fallback when neither is
 present. ICC is preferred; unsupported CICP RGB primaries/transfer combinations
-are disclosed as an sRGB assumption. PQ/HLG, sequences, clean aperture and
-non-square pixel aspect properties are named unsupported variants, not silently
-misrendered. Native decoding is in-process, not sandboxed.
+are disclosed as an sRGB assumption. Clean aperture (`clap`) uses libavif's
+validated crop-rectangle API after YUV→RGBA conversion, including odd offsets
+in subsampled images. Pixel aspect (`pasp`) is corrected to square pixels after
+color normalization with linear-light premultiplied triangle resampling, then
+restored to straight U16: height is retained and width
+is rounded to the nearest `width × hSpacing / vSpacing` (minimum one pixel).
+Crop and aspect correction precede the single rotation/mirror or EXIF fallback;
+Copy Image and displayed dimensions use that corrected image. Corrected output
+must still fit the 16,384-pixel-side / 512 MiB envelope, including each float
+resampling working buffer (16 bytes/pixel); oversized aspect
+expansions fail by name rather than silently changing proportions. Invalid
+apertures that libavif cannot express as an integer crop fail by name. PQ/HLG
+HDR tone mapping and sequences remain named unsupported variants. Native
+decoding is in-process, not sandboxed.
 
 The default `avif-native` feature probes pkg-config on macOS/Linux. This adapter
 requires libavif ≥1.4.2 and dav1d ≥1.5.4. When absent, compilation succeeds with
@@ -385,6 +396,12 @@ This increment does not provision that artifact. Linux remains unverified.
 The three original analytic alpha fixtures are generated from `alpha.png` with
 avifenc 1.4.2, lossless, 4:4:4 identity matrix, depths 8/10/12; encoder tools are
 fixture-generation tools only, never linked by Glance's adapter.
+Additional original fixtures exercise 2:1 pixel aspect (5×3 → 10×3), a 10-bit
+4:2:2 odd-offset crop (5×3 → 3×2), and crop/aspect/rotation/mirror with conflicting
+EXIF orientation (5×3 → 2×6). PQ, HLG and two-frame sequence fixtures exercise
+remaining named rejections. All derive from the same original `alpha.png`; see
+`assets/test/web/README.md` for exact generation commands. The external hato
+conformance sample is used read-only for local smoke, not redistributed.
 
 ## Current limits and remaining work
 

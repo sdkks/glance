@@ -4,6 +4,7 @@
 #include <stdint.h>
 #include <stdlib.h>
 #include <stdio.h>
+#include <string.h>
 
 typedef struct {
     avifDecoder *decoder;
@@ -43,9 +44,6 @@ int glance_avif_decode(const uint8_t *data, size_t length, glance_avif **out, ch
         snprintf(error, error_size, "sequences are not supported yet"); status = 2; goto fail;
     }
     avifImage *im = d->image;
-    if (im->transformFlags & (AVIF_TRANSFORM_CLAP | AVIF_TRANSFORM_PASP)) {
-        snprintf(error, error_size, "clean aperture / non-square pixel transforms are not supported"); status = 2; goto fail;
-    }
     if (im->depth != 8 && im->depth != 10 && im->depth != 12) {
         snprintf(error, error_size, "only 8/10/12-bit stills are supported"); status = 2; goto fail;
     }
@@ -64,6 +62,22 @@ int glance_avif_decode(const uint8_t *data, size_t length, glance_avif **out, ch
     if (result != AVIF_RESULT_OK) goto codec_error;
     result = avifImageYUVToRGB(im, &h->rgb);
     if (result != AVIF_RESULT_OK) goto codec_error;
+    // libavif surfaces transform metadata, but does not apply it on decode.
+    // Convert to RGB first so odd chroma-subsampled crop offsets are supported.
+    if (im->transformFlags & AVIF_TRANSFORM_CLAP) {
+        avifCropRect crop;
+        if (!avifCropRectFromCleanApertureBox(&crop, &im->clap, im->width, im->height, &d->diag)) {
+            snprintf(error, error_size, "clean aperture cannot be expressed as a crop: %s", d->diag.error);
+            status = 2; goto fail;
+        }
+        for (uint32_t y = 0; y < crop.height; ++y) {
+            memmove(h->rgb.pixels + (size_t)y * h->rgb.rowBytes,
+                    h->rgb.pixels + (size_t)(y + crop.y) * h->rgb.rowBytes + (size_t)crop.x * 8,
+                    (size_t)crop.width * 8);
+        }
+        h->rgb.width = crop.width;
+        h->rgb.height = crop.height;
+    }
     *out = h;
     return 0;
 codec_error:
@@ -73,6 +87,14 @@ fail:
     return status;
 }
 
+uint32_t glance_avif_pasp_h(const glance_avif *h) {
+    const avifImage *im = h->decoder->image;
+    return (im->transformFlags & AVIF_TRANSFORM_PASP) ? im->pasp.hSpacing : 1;
+}
+uint32_t glance_avif_pasp_v(const glance_avif *h) {
+    const avifImage *im = h->decoder->image;
+    return (im->transformFlags & AVIF_TRANSFORM_PASP) ? im->pasp.vSpacing : 1;
+}
 uint32_t glance_avif_width(const glance_avif *h) { return h->rgb.width; }
 uint32_t glance_avif_height(const glance_avif *h) { return h->rgb.height; }
 uint32_t glance_avif_stride(const glance_avif *h) { return h->rgb.rowBytes; }
