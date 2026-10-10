@@ -244,8 +244,26 @@ mod tests {
         use image::{ExtendedColorType, ImageEncoder};
         let mut encoder = image::codecs::png::PngEncoder::new(File::create(path).unwrap());
         encoder.set_icc_profile(icc).unwrap();
+        // 256x256 opaque blocks keep the ICC shift visible at human-friendly size:
+        // unit-test color (153,102,51) at full alpha, plus a lighter sweep column so
+        // the P3-vs-untagged difference is apparent across tones, not one dot.
+        let size = 256u32;
+        let mut row = Vec::with_capacity((size * 4) as usize);
+        for x in 0..size {
+            let lift = (x * 64 / size) as u8;
+            row.extend_from_slice(&[
+                153u8.saturating_add(lift),
+                102u8.saturating_add(lift),
+                51u8.saturating_add(lift),
+                255,
+            ]);
+        }
+        let mut pixels = Vec::with_capacity((size * size * 4) as usize);
+        for _ in 0..size {
+            pixels.extend_from_slice(&row);
+        }
         encoder
-            .write_image(&[153, 102, 51, 73], 1, 1, ExtendedColorType::Rgba8)
+            .write_image(&pixels, size, size, ExtendedColorType::Rgba8)
             .unwrap();
     }
 
@@ -256,30 +274,47 @@ mod tests {
             (
                 "srgb",
                 moxcms::ColorProfile::new_srgb().encode().unwrap(),
-                [153, 102, 51, 73],
+                [153, 102, 51, 255],
                 false,
             ),
             (
                 "p3",
                 moxcms::ColorProfile::new_display_p3().encode().unwrap(),
-                [162, 99, 39, 73],
+                [162, 99, 39, 255],
                 false,
             ),
             (
                 "lut",
                 crate::color::tests::srgb_lut(),
-                [153, 102, 51, 73],
+                [153, 102, 51, 255],
                 false,
             ),
-            ("invalid", b"invalid ICC".to_vec(), [153, 102, 51, 73], true),
+            (
+                "invalid",
+                b"invalid ICC".to_vec(),
+                [153, 102, 51, 255],
+                true,
+            ),
         ] {
             let path = dir.0.join(format!("{name}.png"));
             tagged_png(&path, icc);
             let pixels = load(&path, MAX_DIMENSION).unwrap();
             assert_eq!(pixels.warning.is_some(), warning);
-            for (actual, expected) in pixels.rgba.iter().zip(expected) {
-                assert!(actual.abs_diff(expected) <= 2, "{name}: {:?}", pixels.rgba);
+            assert_eq!(pixels.size, [256, 256]);
+            // Column 0 (lift 0) carries the exact tag-converted base color.
+            for (actual, expected) in pixels.rgba[..4].iter().zip(expected) {
+                assert!(actual.abs_diff(expected) <= 2, "{name}: {:?}", actual);
             }
+            // Alpha is fully opaque everywhere; the column lift survives decode as a
+            // monotone rise (CMS roundtrip through linear light may quantize a few
+            // codes, so exact per-column equality is not asserted).
+            assert!(pixels.rgba.chunks_exact(4).all(|pixel| pixel[3] == 255));
+            let reds: Vec<u8> = pixels.rgba[..256 * 4]
+                .chunks_exact(4)
+                .map(|pixel| pixel[0])
+                .collect();
+            assert!(reds.windows(2).all(|pair| pair[1] >= pair[0]));
+            assert!(reds[255].saturating_sub(reds[0]) >= 40, "{name}: {reds:?}");
         }
     }
 
@@ -395,7 +430,7 @@ mod tests {
             &dir.join("p3.png"),
             moxcms::ColorProfile::new_display_p3().encode().unwrap(),
         );
-        image::RgbaImage::from_pixel(1, 1, image::Rgba([153, 102, 51, 73]))
+        image::RgbaImage::from_pixel(256, 256, image::Rgba([153, 102, 51, 255]))
             .save(dir.join("untagged.png"))
             .unwrap();
         tagged_png(&dir.join("invalid.png"), b"invalid ICC".to_vec());
