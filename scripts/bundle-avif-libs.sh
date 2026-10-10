@@ -3,9 +3,12 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 [[ $(uname -s) == Darwin ]] || { echo 'Linux bundling is not implemented; see README.' >&2; exit 1; }
-for tool in brew pkg-config cmake curl shasum tar otool install_name_tool codesign zip cargo; do
+for tool in pkg-config cmake python3 ninja curl shasum tar otool install_name_tool codesign zip cargo; do
     command -v "$tool" >/dev/null || { echo "Missing prerequisite: $tool" >&2; exit 1; }
 done
+python3 -m mesonbuild.mesonmain --version
+ninja --version
+export MACOSX_DEPLOYMENT_TARGET=11.0
 out=${1:-build/bundle-libs}
 mkdir -p "$(dirname "$out")"
 # Never overwrite another packaging run or caller-owned files.
@@ -15,14 +18,19 @@ work="$out/native-build"
 libs="$out/Contents/Frameworks"
 notices="$out/Contents/Resources/licenses/native"
 mkdir -p "$work" "$libs" "$notices" "$out/Contents/MacOS"
-avif=$(brew --prefix libavif)
-dav1d=$(brew --prefix dav1d)
-export PKG_CONFIG_PATH="$avif/lib/pkgconfig:$dav1d/lib/pkgconfig"
-[[ $(pkg-config --modversion libavif) == 1.4.2 ]]
+# Build both unmodified, checksum-pinned upstream sources at the app floor.
+curl --fail --location --retry 3 https://downloads.videolan.org/pub/videolan/dav1d/1.5.4/dav1d-1.5.4.tar.xz -o "$work/dav1d.tar.xz"
+printf '%s  %s\n' 686616b7c69eb88d44459391ab25cac13b6647a3b288835c5784e71c1514a5c5 "$work/dav1d.tar.xz" | shasum -a 256 -c -
+tar -xf "$work/dav1d.tar.xz" -C "$work"
+python3 -m mesonbuild.mesonmain setup "$work/meson" "$work/dav1d-1.5.4" \
+    --prefix="$work/prefix" --libdir=lib --buildtype=release \
+    -Ddefault_library=shared -Denable_tools=false -Denable_tests=false \
+    -Dc_args=-mmacosx-version-min=11.0 -Dc_link_args=-mmacosx-version-min=11.0
+ninja -C "$work/meson"
+ninja -C "$work/meson" install
+export PKG_CONFIG_PATH="$work/prefix/lib/pkgconfig"
 [[ $(pkg-config --modversion dav1d) == 1.5.4 ]]
-otool -L "$avif/lib/libavif.dylib" "$dav1d/lib/libdav1d.dylib" > "$out/before.txt"
-# The stock libavif bottle links AOM (and transitively vmaf). Rebuild the
-# unmodified, checksum-pinned upstream source with only the dav1d backend.
+# libavif uses only the dav1d backend, not the stock bottle's AOM/vmaf closure.
 # AVIF_LIBYUV=OFF disables external libyuv, not upstream's embedded BSD-3
 # scaling subset: upstream CMake still compiles five third_party/libyuv files.
 curl --fail --location --retry 3 https://github.com/AOMediaCodec/libavif/archive/refs/tags/v1.4.2.tar.gz -o "$work/libavif.tar.gz"
@@ -30,6 +38,7 @@ printf '%s  %s\n' 2b645287340ba5a631d268b551dc2d72bd73ac33335962dd36dcdb6d836692
 tar -xzf "$work/libavif.tar.gz" -C "$work"
 cmake -S "$work/libavif-1.4.2" -B "$work/cmake" \
     -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX="$work/prefix" \
+    -DCMAKE_OSX_DEPLOYMENT_TARGET=11.0 \
     -DBUILD_SHARED_LIBS=ON -DAVIF_CODEC_DAV1D=SYSTEM \
     -DAVIF_CODEC_AOM=OFF -DAVIF_CODEC_AVM=OFF -DAVIF_CODEC_LIBGAV1=OFF \
     -DAVIF_CODEC_RAV1E=OFF -DAVIF_CODEC_SVT=OFF -DAVIF_LIBYUV=OFF \
@@ -38,7 +47,9 @@ cmake -S "$work/libavif-1.4.2" -B "$work/cmake" \
 cmake --build "$work/cmake" --parallel
 cmake --install "$work/cmake"
 cp -L "$work/prefix/lib/libavif.16.dylib" "$libs/"
-cp -L "$dav1d/lib/libdav1d.7.dylib" "$libs/"
+cp -L "$work/prefix/lib/libdav1d.7.dylib" "$libs/"
+otool -L "$libs"/*.dylib > "$out/before.txt"
+sh scripts/assert-macos-floor.sh "$MACOSX_DEPLOYMENT_TARGET" "$libs"/*.dylib > "$out/minos.txt"
 # Both approved libraries' complete non-system closure must fit this allowlist.
 # Unexpected dependencies fail closed rather than silently shipping encoders.
 deps() { otool -L "$1" | awk 'NR > 1 {print $1}'; }
@@ -55,17 +66,11 @@ for file in "$libs"/*.dylib; do
     codesign --force --sign - "$file"
 done
 cp "$work/libavif-1.4.2/LICENSE" "$notices/libavif-1.4.2-LICENSE"
-cp "$avif/LICENSE" "$notices/libavif-1.4.2-Homebrew-LICENSE"
-cp "$dav1d/COPYING" "$notices/dav1d-1.5.4-COPYING"
+cp "$work/dav1d-1.5.4/COPYING" "$notices/dav1d-1.5.4-COPYING"
 cp "$work/libavif-1.4.2/third_party/libyuv/AUTHORS" "$notices/embedded-libyuv-AUTHORS"
 (cd "$work/libavif-1.4.2" && shasum -a 256 third_party/libyuv/source/*.c) > "$notices/embedded-libyuv-source-sha256.txt"
-shasum -a 256 "$dav1d/lib/libdav1d.7.dylib" > "$out/dav1d-input-sha256.txt"
-for formula in libavif dav1d; do
-    prefix=$(brew --prefix "$formula")
-    cp "$prefix/INSTALL_RECEIPT.json" "$notices/$formula-Homebrew-receipt.json"
-    cp "$prefix/sbom.spdx.json" "$notices/$formula-Homebrew-sbom.spdx.json"
-done
-export PKG_CONFIG_PATH="$work/prefix/lib/pkgconfig:$dav1d/lib/pkgconfig"
+shasum -a 256 "$work/dav1d.tar.xz" "$work/libavif.tar.gz" > "$notices/native-source-sha256.txt"
+export PKG_CONFIG_PATH="$work/prefix/lib/pkgconfig"
 cargo build --release --locked
 binary="$out/Contents/MacOS/glance"
 cp target/release/glance "$binary"
@@ -108,6 +113,8 @@ stat -f '%N: %z bytes' "$binary" "$libs"/*.dylib >> "$out/sizes.txt"
 stat -f 'native libraries plus notices zip: %z bytes' "$out/native-avif.zip" >> "$out/sizes.txt"
 printf 'libavif 1.4.2; dav1d 1.5.4; arch %s; source sha256 %s\n' "$(uname -m)" \
     2b645287340ba5a631d268b551dc2d72bd73ac33335962dd36dcdb6d8366921d > "$out/versions.txt"
+printf 'dav1d source sha256 %s; minimum macOS 11.0\n' \
+    686616b7c69eb88d44459391ab25cac13b6647a3b288835c5784e71c1514a5c5 >> "$out/versions.txt"
 shasum -a 256 "$binary" "$libs"/*.dylib > "$out/payload-sha256.txt"
 echo "Staged payload: $out/Contents (copy into .app before final signing/archiving)"
 echo "Evidence: $out/{before,after,smoke,dyld,sizes,versions}.txt"

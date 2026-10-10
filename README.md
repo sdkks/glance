@@ -455,15 +455,23 @@ conformance sample is used read-only for local smoke, not redistributed.
 
 ```sh
 # In addition to the pinned Rust toolchain and Apple command-line tools:
-brew install cmake pkg-config libavif dav1d
+brew install cmake pkg-config
+python3 -m pip install --user meson ninja
 make bundle-avif
 # For a subsequent run, use a new, nonexistent staging directory:
 make bundle-avif AVIF_STAGE=build/avif-release-2
 ```
 
-The script requires installed libavif 1.4.2 (development probe) and dav1d 1.5.4.
-It downloads the checksum-pinned libavif 1.4.2 source, builds it unmodified with
-only the dav1d backend, and copies the installed dav1d decoder. No external
+The script downloads checksum-pinned libavif 1.4.2 and dav1d 1.5.4 sources
+and builds both unmodified at a macOS **11.0** minimum. dav1d uses Meson
+with `-Ddefault_library=shared`, `-Dc_args=-mmacosx-version-min=11.0` and
+`-Dc_link_args=-mmacosx-version-min=11.0`; libavif uses CMake's explicit
+`CMAKE_OSX_DEPLOYMENT_TARGET=11.0` and only the dav1d backend. Cargo also
+builds with `MACOSX_DEPLOYMENT_TARGET=11.0`. Verified build prerequisites:
+Cargo 1.97.1 (pinned Rust toolchain), CMake 3.29.0, Meson 1.12.1 (invoked as
+`python3 -m mesonbuild.mesonmain`), Ninja 1.13.2.git.kitware.jobserver-pipe-1,
+pkg-config and Apple command-line tools. Source tarball SHA-256 values are
+recorded in `THIRD_PARTY.md` and verified before extraction. No external
 libyuv, AOM, encoder, libvmaf or libheif library is shipped. Upstream's own five
 embedded libyuv scaling source files are still compiled with `AVIF_LIBYUV=OFF`;
 their BSD-3-Clause notice is in the copied upstream LICENSE. See `THIRD_PARTY.md`
@@ -480,9 +488,9 @@ not a finished `.app` or signed/notarized distribution. Its contract is:
   decoder libraries; install names use executable/loader-relative paths.
 - `Contents/Resources/licenses/native/`: complete upstream libavif LICENSE
   (including the embedded scaling notice), dav1d COPYING, embedded authors/source
-  hashes, and Homebrew provenance receipts/SBOMs.
+  hashes, and verified native source archive hashes.
 - Evidence beside `Contents/`: `before.txt`, `after.txt`, `smoke.txt`, `dyld.txt`,
-  `sizes.txt`, `versions.txt`, input/payload SHA-256 files and `native-avif.zip`.
+  `sizes.txt`, `versions.txt`, `minos.txt`, payload SHA-256 files and `native-avif.zip`.
   `native-build/` and this evidence are not app contents.
 
 `make macos-artifacts` copies **all three Contents subdirectories**, preserving
@@ -494,12 +502,12 @@ and traces a real packaged-binary AVIF decode with empty dyld library/fallback
 paths and injected/alternate framework paths cleared. A trace that loads any
 Homebrew path fails. This is relocation evidence, not a test on a clean OS install.
 
-Measured macOS arm64 payload: libavif **269,488 B**, dav1d **843,344 B**,
-combined **1,112,832 B**; dylibs plus native notices zipped ≈**473 KB**.
+Measured macOS arm64 payload: libavif **269,664 B**, dav1d **924,992 B**,
+combined **1,194,656 B**; dylibs plus native notices zipped **504,854 B**.
 Including executable relocation/re-signing, the previously measured executable
 plus dylib delta was ≈**+1.0 MB**. The native compressed increment is far under
 the **40 MB compressed-DMG budget**, not gigantic. The complete AVIF-enabled
-DMG is now measured at ≈**11.86 MB**, including crate/font/native notices;
+DMG is now measured at ≈**11.90 MB**, including crate/font/native notices;
 see Packaging (macOS) for the complete comparison.
 
 ### Packaging/CI decoder smoke diagnostic
@@ -794,7 +802,7 @@ make macos-smoke IMAGE="$PWD/assets/test/web/alpha12.avif"
 ```
 
 Requires macOS, the pinned Rust toolchain, the native build prerequisites listed
-above (Homebrew libavif/dav1d, CMake, pkg-config), Python 3.11+ for notices, and
+above (CMake, Meson, Ninja, pkg-config), Python 3.11+ for notices, and
 Apple's `ditto`, `hdiutil`, `otool`, `lipo`, `plutil` and `codesign`. These are
 build-time tools, not extra runtime dependencies. Outputs live in
 `target/macos-artifacts/`: `Glance.app`, `Glance-<version>-<arch>.zip`,
@@ -860,15 +868,19 @@ filesystem allocation):
 
 | Payload | .app | zip | DMG |
 | --- | ---: | ---: | ---: |
-| Native AVIF + all notices | 28.48 MB | 13.38 MB | 11.86 MB |
+| Native AVIF + all notices | 28.53 MB | 13.41 MB | 11.90 MB |
 | No native AVIF, crate/font notices | 27.25 MB | 12.88 MB | 11.39 MB |
 | Source-only, no notices | 23.80 MB | 10.94 MB | 11.08 MB |
 
-The native AVIF + native-notices increment is ≈0.47 MB compressed DMG; the
+The native AVIF + native-notices increment is ≈0.51 MB compressed DMG; the
 complete DMG is **well below 40 MB**. DMG uses UDZO with `zlib-level=9`;
 zip uses ditto's default compression. Sizes vary with toolchain/archive metadata.
-The bundled dav1d bottle on this host declares macOS 26.0, so the plist's 11.0
-floor is not a verified oldest-OS compatibility claim for native AVIF.
+Both source-built dylibs and the executable report Mach-O `minos 11.0`.
+Bundling checks both libraries before relocation; packaging rejects every
+executable/dylib with a missing deployment version or a minimum above 11.0
+before signing. This prevents shipping a newer-floor bottle accidentally.
+Actual runtime behaviour on macOS 11–15 and Intel remains **UNVERIFIED**;
+loader metadata and current arm64 smoke are not older-OS runtime testing.
 
 These builds are **ad-hoc signed, but not Developer ID signed or notarized**.
 Packaging signs the completed bundle before archiving and verifies its signature;

@@ -66,6 +66,7 @@ fi
 for macho in "$app/Contents/MacOS/glance" "$app"/Contents/Frameworks/*.dylib; do
     [ -f "$macho" ] || continue
     lipo "$macho" -verify_arch "$arch"
+    sh scripts/assert-macos-floor.sh "$MACOSX_DEPLOYMENT_TARGET" "$macho"
     otool -L "$macho" | awk 'NR > 1 { print $1 }' > "$stage/dependencies"
     while IFS= read -r dep; do
         case "$dep" in
@@ -93,7 +94,7 @@ cat > "$plist" <<EOF
 <key>CFBundlePackageType</key><string>APPL</string>
 <key>CFBundleShortVersionString</key><string>$version</string>
 <key>CFBundleVersion</key><string>$version</string>
-<key>LSMinimumSystemVersion</key><string>11.0</string>
+<key>LSMinimumSystemVersion</key><string>$MACOSX_DEPLOYMENT_TARGET</string>
 <key>LSApplicationCategoryType</key><string>public.app-category.graphics-design</string>
 <key>CFBundleDocumentTypes</key><array>
 EOF
