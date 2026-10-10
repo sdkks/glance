@@ -38,6 +38,15 @@ physical screen pixel, including HiDPI. `+` (or `=`) and `−` zoom about the ca
 center. A line-unit mouse wheel zooms at the pointer, clamped to 0.01×–500×.
 Drag or two-axis point-unit trackpad scrolling pans when the image exceeds the
 viewport; scrolling never navigates. Ctrl/Command+scroll also zooms at the pointer.
+Hold **Space** for temporary pan mode, then **left-drag** on an enlarged image:
+the canvas cursor is a grab hand while held and a grabbing hand during the drag.
+Releasing Space mid-drag stops panning until the mouse button is released; losing
+window focus or opening a menu/dialog cancels the mode. Right-click remains the
+context menu; middle-click is unchanged. Space on a fitted image does nothing.
+A hold may wait through loading and activates once an enlarged image is displayed.
+Space has no navigation/zoom binding and is not consumed by pan mode: keyboard
+controls (including future typing contexts) retain precedence. Any future explicit
+Space command should take precedence over this temporary mode and suppress it.
 Fit preserves the current user orientation. `R` rotates clockwise, `Shift+R`
 rotates counterclockwise, `M` mirrors horizontally, and `F` flips vertically.
 These View/context-menu actions compose in command order in the displayed axes,
