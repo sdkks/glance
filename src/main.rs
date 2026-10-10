@@ -14,6 +14,15 @@ mod view;
 
 use eframe::egui;
 
+fn window_icon() -> egui::IconData {
+    #[cfg(target_os = "macos")]
+    let png = include_bytes!("../assets/icons/glance.iconset/icon_256x256.png");
+    #[cfg(not(target_os = "macos"))]
+    let png = include_bytes!("../assets/icons/hicolor/256x256/apps/glance.png");
+    // The bundled PNG is validated at build/review time, not user input.
+    eframe::icon_data::from_png_bytes(png).expect("bundled Glance icon must be a valid PNG")
+}
+
 fn main() -> eframe::Result {
     let initial_path = std::env::args_os().nth(1).map(std::path::PathBuf::from);
     let options = eframe::NativeOptions {
@@ -21,7 +30,7 @@ fn main() -> eframe::Result {
         viewport: egui::ViewportBuilder::default()
             .with_inner_size([960.0, 640.0])
             .with_min_inner_size([280.0, 180.0])
-            .with_icon(egui::IconData::default()),
+            .with_icon(window_icon()),
         ..Default::default()
     };
     eframe::run_native(
@@ -29,4 +38,21 @@ fn main() -> eframe::Result {
         options,
         Box::new(move |cc| Ok(Box::new(app::Viewer::new(cc, initial_path)))),
     )
+}
+
+#[cfg(test)]
+mod icon_tests {
+    #[test]
+    fn bundled_icons_decode_at_256_pixels() {
+        for png in [
+            include_bytes!("../assets/icons/glance.iconset/icon_256x256.png").as_slice(),
+            include_bytes!("../assets/icons/hicolor/256x256/apps/glance.png").as_slice(),
+        ] {
+            let icon = eframe::icon_data::from_png_bytes(png).unwrap();
+            assert_eq!((icon.width, icon.height), (256, 256));
+            assert_eq!(icon.rgba.len(), 256 * 256 * 4);
+            assert!(icon.rgba.chunks_exact(4).any(|pixel| pixel[3] != 0));
+        }
+        assert_eq!(super::window_icon().width, 256);
+    }
 }

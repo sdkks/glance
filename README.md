@@ -308,6 +308,7 @@ smoke-tested on macOS arm64, not certified on Linux.
 | `clippy` | `cargo clippy --workspace --all-targets --locked -- -D warnings` |
 | `test` | `cargo test --workspace --locked` |
 | `verify` | Sequential, fail-fast fmt-check → check → clippy → test, even with `make -j` |
+| `icons` | Rebuild derived icon files from committed masters using macOS `sips` + `iconutil` |
 | `precommit` | `git diff --cached --check`, then working-tree fmt-check and check |
 | `build` | `cargo build --release --locked` |
 | `run` | `cargo run --locked -- $(ARGS)` |
@@ -363,6 +364,58 @@ configuration or installs/overwrites a hook.** The tracked hook executes
 compilation use the whole working tree. This does not compile an isolated
 partially staged snapshot. Run `make verify` against the actual complete tree
 before review. The local hook is intentionally lighter than full verification.
+
+## App icons
+
+Run `make icons` on macOS to regenerate `resources/glance.icns`, the ten PNGs in
+`assets/icons/glance.iconset/`, and the seven Linux PNGs in
+`assets/icons/hicolor/{16,24,32,48,64,128,256}x{same}/apps/glance.png`.
+Only these derived files are written; `assets/icon/` is unchanged. Generation
+uses a temporary iconset, system `sips` resampling and `iconutil` conversion,
+and preserves destination mtimes when bytes match. No Downloads files, Python,
+or runtime dependencies are required. Outputs were byte-identical across two
+runs with sips-316 / macOS 26.6.2; byte identity across tool/OS versions is not
+promised. No embedded timestamp differences were observed.
+
+The source of truth is `assets/icon/glance-icon-master.png` (macOS square) and
+`assets/icon/glance-icon-linux-master.png` (Linux round), both 1024×1024.
+The supplied instructions name `glance_assets.png`, but the supplied file was
+`glance app assets.jpg` (2400×1792). Their five boxes were cropped literally:
+each endpoint was scaled independently from the 1152×864 reference and truncated
+with `int`, as in the supplied Pillow script. The exact crops are
+`app_icon_mac.png` / `app_icon_linux.png` (1066×1062), `tray_icon.png` (266×266),
+and `icon_small_square.png` / `icon_small_round.png` (133×133) in `assets/icon/`.
+The large crops were resized to square masters, without added padding, background
+removal, redrawing, or compositing. The JPEG has no alpha, so its background is
+preserved. Masters use RGBA with fully opaque alpha for icon encoding; this does
+not remove the supplied background. No vector source was supplied. Tiny/tray
+crops are preserved but are not used for application resampling or a new tray
+feature.
+
+Future macOS packaging must copy `resources/glance.icns` to
+`Glance.app/Contents/Resources/glance.icns` and put this entry in
+`Glance.app/Contents/Info.plist`:
+
+```xml
+<key>CFBundleIconFile</key>
+<string>glance.icns</string>
+```
+
+There is currently no `.app` bundle, packaging, signing, or notarization pipeline.
+Dev runs embed the 256px platform PNG using eframe's viewport `IconData`; eframe
+also sets the macOS application/Dock icon. A human should confirm Dock appearance.
+On Linux, future packaging should install the hicolor tree under
+`/usr/share/icons/hicolor/` (or `$HOME/.local/share/icons/hicolor/` for a user
+install), with `Icon=glance` in the desktop entry. Wayland/compositor discovery
+may require that desktop entry; viewport icons alone do not replace packaging.
+
+Linux cannot run the macOS-only `make icons` target: use the committed PNGs or
+regenerate them on macOS. An offline Linux alternative, if updating artwork,
+is ImageMagick, e.g. `magick assets/icon/glance-icon-linux-master.png -resize
+24x24 assets/icons/hicolor/24x24/apps/glance.png`, repeated for each listed size.
+That alternative is not a project dependency, has not been validated here, and
+need not match sips bytes; `.icns` regeneration still requires macOS.
+See `THIRD_PARTY.md` for the human-supplied artwork provenance.
 
 ## Licensing
 
