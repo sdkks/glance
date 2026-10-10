@@ -485,8 +485,9 @@ not a finished `.app` or signed/notarized distribution. Its contract is:
   `sizes.txt`, `versions.txt`, input/payload SHA-256 files and `native-avif.zip`.
   `native-build/` and this evidence are not app contents.
 
-Copy **all three Contents subdirectories**, preserving their relative locations,
-into the final macOS app before final signing and archiving. The script ad-hoc
+`make macos-artifacts` copies **all three Contents subdirectories**, preserving
+their relative locations, into the final app before signing and archiving.
+The native stage script ad-hoc
 re-signs rewritten Mach-O files; that is not Developer ID signing/notarization.
 It audits the full dylib closure, rejecting unexpected non-system dependencies,
 and traces a real packaged-binary AVIF decode with empty dyld library/fallback
@@ -497,8 +498,9 @@ Measured macOS arm64 payload: libavif **269,488 B**, dav1d **843,344 B**,
 combined **1,112,832 B**; dylibs plus native notices zipped ≈**473 KB**.
 Including executable relocation/re-signing, the previously measured executable
 plus dylib delta was ≈**+1.0 MB**. The native compressed increment is far under
-the **40 MB compressed-DMG budget**, not gigantic; a complete DMG still needs
-its own final measurement (ZIP is not DMG compression).
+the **40 MB compressed-DMG budget**, not gigantic. The complete AVIF-enabled
+DMG is now measured at ≈**11.86 MB**, including crate/font/native notices;
+see Packaging (macOS) for the complete comparison.
 
 ### Packaging/CI decoder smoke diagnostic
 
@@ -787,12 +789,14 @@ or publish distribution artifacts.
 ## Packaging (macOS)
 
 ```sh
-make macos-artifacts       # or make dmg; builds the release binary first
-make macos-smoke IMAGE="$PWD/assets/icons/glance.iconset/icon_256x256.png"
+make macos-artifacts       # or make dmg; prepares native AVIF + notices first
+make macos-smoke IMAGE="$PWD/assets/test/web/alpha12.avif"
 ```
 
-Requires macOS, the pinned Rust toolchain and Apple's `ditto`, `hdiutil`,
-`otool`, `plutil` and `codesign` (no additional runtime dependencies). Outputs live in
+Requires macOS, the pinned Rust toolchain, the native build prerequisites listed
+above (Homebrew libavif/dav1d, CMake, pkg-config), Python 3.11+ for notices, and
+Apple's `ditto`, `hdiutil`, `otool`, `lipo`, `plutil` and `codesign`. These are
+build-time tools, not extra runtime dependencies. Outputs live in
 `target/macos-artifacts/`: `Glance.app`, `Glance-<version>-<arch>.zip`,
 `Glance-<version>-<arch>.dmg` and `Glance-<version>-<arch>.sha256`.
 Version comes from `[package].version` in `Cargo.toml`; architecture is the
@@ -815,18 +819,56 @@ Registration does not change existing default associations. Native Finder
 file-open event handling is still deferred: launch with a CLI image argument
 or use Open/drop inside the app; registration alone does not implement events.
 
-Optional native libraries belong in a flat `bundle-libs/*.dylib` directory.
-The script copies them into `Contents/Frameworks` and links the binary with
-`@executable_path/../Frameworks` as an rpath. The native producer must supply
-matching build/pkg-config inputs with `@rpath/<basename>` install names;
-transitive libraries must likewise use `@rpath` or `@loader_path` and all be
-present. Packaging validates these dependencies and fails on absolute external
-paths when `bundle-libs/` exists. It does not rewrite Mach-O install names;
-copied dylibs are ad-hoc signed before the enclosing bundle. If the directory is
-absent, copying is a no-op and external development libraries produce warnings:
-**such artifacts require those libraries and are not self-contained releases**.
-Decoder-only AVIF provisioning and native license notices remain separate work;
-Homebrew libavif is a development dependency, not a shipping native build.
+Native AVIF is bundled **by default**: `make macos-artifacts` runs `make
+bundle-avif` when `AVIF_STAGE` (default `build/bundle-libs`) does not exist,
+then `make notices` using that stage's native notices. An existing stage is an
+explicit reusable input; choose a fresh `AVIF_STAGE` after source/toolchain
+changes to rebuild it. Partial/missing stage inputs fail loudly, never silently
+produce an AVIF-less release. Direct `sh scripts/package-macos.sh [stage]`
+consumes an already prepared stage and notices; it does not prepare them.
+
+Packaging copies the stage's native-linked executable and exactly
+`libavif.16.dylib` + `libdav1d.7.dylib` into `Contents/MacOS` and
+`Contents/Frameworks`, preserving executable/loader-relative install names.
+It checks host architecture and the complete native dependency closure, rejecting
+external non-system paths. AVIF therefore works without Homebrew at runtime;
+the smoke provides loader-trace evidence, not certification on a clean OS install.
+Crate/font/MIT notices from `build/notices` (`NOTICES_STAGE` overrides it) go in
+`Contents/Resources/licenses/`, with the native tree merged once beneath
+`native/`. Conflicting duplicate notice bytes are rejected before signing.
+No native-build sources, fixture assets or build logs enter the app.
+
+Escape hatches for local, source-only bundles:
+
+```sh
+make macos-artifacts SKIP_AVIF=1 SKIP_NOTICES=1
+# Or keep crate/font notices, but disable native AVIF (use fresh notice output):
+make macos-artifacts SKIP_AVIF=1 NOTICES_STAGE=build/notices-source-only
+```
+
+`SKIP_AVIF=1` builds with `--no-default-features`; it does not ship a binary
+linked to Homebrew. `SKIP_NOTICES=1` omits generated crate/font notices, but still
+ships native license files if AVIF is enabled. **Skipping notices is not a
+release-ready distribution.** With AVIF skipped, smoke still checks signatures
+and GUI display of a non-AVIF image, but explicitly omits AVIF decode evidence.
+`MACOS_OUT` selects a comparison output directory. Repackaging preserves the
+previous direct app in `target/macos-artifacts/previous.*/Glance.app` rather than
+merging stale files; archives are replaced. Retained previous apps are not shipped.
+
+Measured arm64 0.1.0 artifacts (decimal MB; .app is summed file payload, not
+filesystem allocation):
+
+| Payload | .app | zip | DMG |
+| --- | ---: | ---: | ---: |
+| Native AVIF + all notices | 28.48 MB | 13.38 MB | 11.86 MB |
+| No native AVIF, crate/font notices | 27.25 MB | 12.88 MB | 11.39 MB |
+| Source-only, no notices | 23.80 MB | 10.94 MB | 11.08 MB |
+
+The native AVIF + native-notices increment is ≈0.47 MB compressed DMG; the
+complete DMG is **well below 40 MB**. DMG uses UDZO with `zlib-level=9`;
+zip uses ditto's default compression. Sizes vary with toolchain/archive metadata.
+The bundled dav1d bottle on this host declares macOS 26.0, so the plist's 11.0
+floor is not a verified oldest-OS compatibility claim for native AVIF.
 
 These builds are **ad-hoc signed, but not Developer ID signed or notarized**.
 Packaging signs the completed bundle before archiving and verifies its signature;
@@ -851,9 +893,14 @@ not establish a verified developer identity.
 
 The smoke command checks checksums, plist syntax, version/icon/executable keys
 and all Viewer/Alternate ranks, verifies the direct app's signature, extracts the
-zip, verifies its preserved signature and compares its main bundle files, then
-launches the zip and direct bundled binaries with the image. It
-mounts the DMG read-only in a unique temporary mountpoint, verifies its app's signature,
+zip, verifies its preserved signature and compares its main bundle files and
+complete notices tree. For zip, direct app and mounted DMG it first decodes
+`AVIF_IMAGE` (default `assets/test/web/alpha12.avif`) with empty DYLD library and
+fallback paths, cleared injected/alternate framework paths and loader tracing;
+it requires both bundled dylib paths and rejects Homebrew/Cellar loads.
+Then it launches the GUI under the same sanitized loader environment with `IMAGE`.
+It mounts the DMG read-only in a unique temporary mountpoint, verifies its app's
+signature and complete notices tree,
 checks the Applications link, launches its binary and requires the existing
 `Displayed` diagnostic within 30 seconds, then terminates only those processes
 and unmounts/removes the mountpoint. Complete logs remain in the printed temporary
@@ -884,10 +931,10 @@ subset's exact notices at
 directory and its adjacent bundle `versions.txt` when present. Otherwise the
 notice file contains a clear TODO: **native notices are not yet staged**. That
 TODO is not release-ready: stage native notices first, then regenerate. macOS
-and Linux artifact builders must include the entire generated directory inside
-all `.app`/ZIP/DMG, AppImage and tarball artifacts before signing or archiving,
-not merely publish a separate notice attachment. Packaging integrations are
-maintained with their platform artifact builders.
+packaging now does this automatically and includes the entire generated tree
+under `Contents/Resources/licenses` before signing, so .app, zip and DMG each
+carry the notices. Linux builders likewise must include the entire generated
+directory in AppImage and tarball artifacts, not merely a separate attachment.
 
 Output ordering and contents contain no generated timestamps or machine-specific
 crate paths. Repeating generation with identical inputs preserves bytes and

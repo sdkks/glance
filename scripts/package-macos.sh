@@ -5,8 +5,7 @@ cd "$(dirname "$0")/.."
 [ "$(uname -s)" = Darwin ] || { echo 'macOS packaging requires macOS.' >&2; exit 1; }
 arch=$(uname -m)
 case "$arch" in
-    arm64) target=aarch64-apple-darwin ;;
-    x86_64) target=x86_64-apple-darwin ;;
+    arm64|x86_64) ;;
     *) echo "Unsupported macOS architecture: $arch" >&2; exit 1 ;;
 esac
 version=$(awk '/^\[package\]$/ { package=1; next } /^\[/ { package=0 } package && /^version = / { gsub(/"/, "", $3); print $3; exit }' Cargo.toml)
@@ -15,28 +14,58 @@ case "$version" in
 esac
 # 11.0 is the first Apple Silicon macOS and a common floor for both architectures.
 export MACOSX_DEPLOYMENT_TARGET=11.0
-cargo rustc --release --locked --target "$target" --target-dir target --bin glance -- \
-    -C link-arg=-Wl,-rpath,@executable_path/../Frameworks
-out="$PWD/target/macos-artifacts"
+native_stage=${1:-${AVIF_STAGE:-build/bundle-libs}}
+notices=${NOTICES_STAGE:-build/notices}
+# A skipped native stage is a genuinely source-only build, not Homebrew linkage.
+if [ "${SKIP_AVIF:-0}" = 1 ]; then
+    cargo build --release --locked --no-default-features
+    binary=target/release/glance
+else
+    binary="$native_stage/Contents/MacOS/glance"
+    for input in "$binary" "$native_stage/Contents/Frameworks/libavif.16.dylib" \
+        "$native_stage/Contents/Frameworks/libdav1d.7.dylib" \
+        "$native_stage/Contents/Resources/licenses/native/libavif-1.4.2-LICENSE" \
+        "$native_stage/Contents/Resources/licenses/native/dav1d-1.5.4-COPYING"; do
+        [ -f "$input" ] || { echo "Missing AVIF stage input: $input; run make bundle-avif (or SKIP_AVIF=1)." >&2; exit 1; }
+    done
+fi
+if [ "${SKIP_NOTICES:-0}" != 1 ]; then
+    [ -f "$notices/THIRD-PARTY-NOTICES.md" ] && [ -f "$notices/LICENSE" ] || {
+        echo "Missing notices: $notices; run make notices (or SKIP_NOTICES=1)." >&2; exit 1;
+    }
+fi
+out=${MACOS_OUT:-"$PWD/target/macos-artifacts"}
 mkdir -p "$out"
 stage=$(mktemp -d /tmp/glance-macos-package.XXXXXX)
 trap 'rm -rf "$stage"' EXIT HUP INT TERM
 app="$stage/Glance.app"
 mkdir -p "$app/Contents/MacOS" "$app/Contents/Resources"
-cp "target/$target/release/glance" "$app/Contents/MacOS/glance"
+cp "$binary" "$app/Contents/MacOS/glance"
 cp resources/glance.icns "$app/Contents/Resources/glance.icns"
-# Optional native packaging seam: flat, already-relocatable dylibs. Never alter
-# install names here; the native producer owns those inputs. Copied binaries
-# receive ad-hoc signatures below, before signing the enclosing bundle.
-if [ -d bundle-libs ]; then
-    mkdir -p "$app/Contents/Frameworks"
-    for lib in bundle-libs/*.dylib; do
-        [ -f "$lib" ] || continue
-        cp -L "$lib" "$app/Contents/Frameworks/"
-    done
+if [ "${SKIP_NOTICES:-0}" != 1 ]; then
+    ditto "$notices" "$app/Contents/Resources/licenses"
+fi
+if [ "${SKIP_AVIF:-0}" != 1 ]; then
+    mkdir -p "$app/Contents/Frameworks" "$app/Contents/Resources/licenses/native"
+    cp "$native_stage/Contents/Frameworks/libavif.16.dylib" \
+        "$native_stage/Contents/Frameworks/libdav1d.7.dylib" "$app/Contents/Frameworks/"
+    # The generated notices already contain this tree. Refuse disagreements,
+    # then merge only identical/new files (versions.txt belongs to the generator).
+    find "$native_stage/Contents/Resources/licenses/native" -type f > "$stage/native-files"
+    while IFS= read -r file; do
+        relative=${file#"$native_stage/Contents/Resources/licenses/native/"}
+        destination="$app/Contents/Resources/licenses/native/$relative"
+        if [ -f "$destination" ]; then
+            cmp "$file" "$destination" || { echo "Conflicting native notice: $relative" >&2; exit 1; }
+        else
+            mkdir -p "$(dirname "$destination")"
+            cp "$file" "$destination"
+        fi
+    done < "$stage/native-files"
 fi
 for macho in "$app/Contents/MacOS/glance" "$app"/Contents/Frameworks/*.dylib; do
     [ -f "$macho" ] || continue
+    lipo "$macho" -verify_arch "$arch"
     otool -L "$macho" | awk 'NR > 1 { print $1 }' > "$stage/dependencies"
     while IFS= read -r dep; do
         case "$dep" in
@@ -46,12 +75,8 @@ for macho in "$app/Contents/MacOS/glance" "$app"/Contents/Frameworks/*.dylib; do
                     echo "Missing bundled dependency: $dep ($macho)" >&2; exit 1;
                 } ;;
             *)
-                if [ -d bundle-libs ]; then
-                    echo "Native inputs must use relocatable install names, not $dep ($macho)." >&2
-                    exit 1
-                fi
-                echo "WARNING: development-only external native dependency: $dep" >&2
-                ;;
+                echo "Nonrelocatable native dependency: $dep ($macho)." >&2
+                exit 1 ;;
         esac
     done < "$stage/dependencies"
 done
@@ -100,7 +125,8 @@ sign_bundle() {
         [ -f "$lib" ] || continue
         codesign --force --sign - "$lib" || return 1
     done
-    codesign --force --deep --sign - "$app" &&
+    codesign --force --sign - "$app/Contents/MacOS/glance" &&
+        codesign --force --sign - "$app" &&
         codesign --verify --deep --strict --verbose=2 "$app" &&
         codesign -dv "$app"
 }
@@ -120,9 +146,20 @@ mkdir "$stage/image-root"
 ditto "$app" "$stage/image-root/Glance.app"
 ln -s /Applications "$stage/image-root/Applications"
 hdiutil create -volname "Glance $version" -srcfolder "$stage/image-root" \
-    -format UDZO "$stage/$name.dmg"
+    -format UDZO -imagekey zlib-level=9 "$stage/$name.dmg"
 (cd "$stage" && shasum -a 256 "$name.zip" "$name.dmg" > "$name.sha256")
-# ditto updates the direct-launch bundle; archives replace only these exact files.
+# Preserve a previous direct app instead of merging stale libraries/notices.
+if [ -e "$out/Glance.app" ]; then
+    previous=$(mktemp -d "$out/previous.XXXXXX")
+    mv "$out/Glance.app" "$previous/Glance.app"
+    echo "Previous app preserved: $previous/Glance.app"
+fi
 ditto "$app" "$out/Glance.app"
 for ext in zip dmg sha256; do mv -f "$stage/$name.$ext" "$out/$name.$ext"; done
 printf 'Artifacts: %s/Glance.app and %s/%s.{zip,dmg,sha256}\n' "$out" "$out" "$name"
+app_bytes=$(find "$out/Glance.app" -type f -exec stat -f '%z' {} + | awk '{ total += $1 } END { printf "%.0f", total }')
+printf 'Glance.app payload: %s bytes\n' "$app_bytes"
+stat -f '%N: %z bytes' "$out/$name.zip" "$out/$name.dmg"
+dmg_bytes=$(stat -f '%z' "$out/$name.dmg")
+if [ "$dmg_bytes" -lt 40000000 ]; then budget=PASS; else budget=OVER; fi
+printf 'DMG budget: %s (< 40 MB; UDZO zlib-level=9)\n' "$budget"

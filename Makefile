@@ -74,3 +74,16 @@ macos-smoke:
 .PHONY: notices
 notices:
 	python3 scripts/generate-notices.py $(NOTICES_ARGS)
+
+# macOS artifact inputs: ordered preparation, separate from existing targets.
+.PHONY: macos-artifact-inputs
+NOTICES_STAGE ?= build/notices
+export AVIF_STAGE NOTICES_STAGE SKIP_AVIF SKIP_NOTICES MACOS_OUT
+macos-artifacts: macos-artifact-inputs
+macos-artifact-inputs:
+	@test "$$(uname -s)" = Darwin || { echo "macOS packaging requires macOS." >&2; exit 1; }
+	@if [ "$(SKIP_AVIF)" != 1 ] && [ ! -d "$(AVIF_STAGE)" ]; then MACOSX_DEPLOYMENT_TARGET=11.0 $(MAKE) bundle-avif; fi
+	@if [ "$(SKIP_NOTICES)" != 1 ]; then \
+		if [ "$(SKIP_AVIF)" = 1 ]; then native=build/no-native-notices; else native="$(AVIF_STAGE)/Contents/Resources/licenses/native"; fi; \
+		$(MAKE) notices NOTICES_ARGS="--output \"$(NOTICES_STAGE)\" --native-notices \"$$native\""; \
+	fi

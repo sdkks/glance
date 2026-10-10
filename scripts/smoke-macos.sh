@@ -6,11 +6,13 @@ image=${1:?Usage: sh scripts/smoke-macos.sh /absolute/path/to/image}
 case "$image" in /*) ;; *) echo 'IMAGE must be an absolute path.' >&2; exit 1 ;; esac
 [ -f "$image" ] || { echo "Image not found: $image" >&2; exit 1; }
 version=$(awk '/^\[package\]$/ { p=1; next } /^\[/ { p=0 } p && /^version = / { gsub(/"/, "", $3); print $3; exit }' Cargo.toml)
-out="$PWD/target/macos-artifacts"
+out=${MACOS_OUT:-"$PWD/target/macos-artifacts"}
 name="Glance-$version-$(uname -m)"
 work=$(mktemp -d /tmp/glance-macos-smoke.XXXXXX)
 pid=
 mounted=no
+mkdir "$work/empty-loader-path"
+avif_image=${AVIF_IMAGE:-"$PWD/assets/test/web/alpha12.avif"}
 cleanup() {
     if [ -n "$pid" ]; then kill "$pid" 2>/dev/null || :; wait "$pid" 2>/dev/null || :; fi
     if [ "$mounted" = yes ]; then hdiutil detach "$work/mount" || return 1; fi
@@ -18,9 +20,32 @@ cleanup() {
     echo "Smoke evidence: $work"
 }
 trap cleanup EXIT HUP INT TERM
+sanitize_loader() {
+    unset DYLD_INSERT_LIBRARIES DYLD_FRAMEWORK_PATH DYLD_FALLBACK_FRAMEWORK_PATH
+    unset DYLD_VERSIONED_LIBRARY_PATH DYLD_VERSIONED_FRAMEWORK_PATH DYLD_ROOT_PATH
+    export DYLD_LIBRARY_PATH="$work/empty-loader-path"
+    export DYLD_FALLBACK_LIBRARY_PATH="$work/empty-loader-path"
+    export DYLD_PRINT_LIBRARIES=1
+}
+check_avif() {
+    binary=$1; label=$2
+    [ "${SKIP_AVIF:-0}" != 1 ] || return 0
+    (sanitize_loader; GLANCE_SMOKE_IMAGE=1 "$binary" "$avif_image") \
+        > "$work/$label-avif.log" 2> "$work/$label-dyld.log"
+    grep -E '^decoded [0-9]+x[0-9]+' "$work/$label-avif.log"
+    frameworks="$(dirname "$binary")/../Frameworks"
+    frameworks=$(cd "$frameworks" && pwd -P)
+    for lib in libavif.16.dylib libdav1d.7.dylib; do
+        grep -F "$frameworks/$lib" "$work/$label-dyld.log"
+    done
+    if grep -E '/opt/homebrew|/usr/local|/Cellar/' "$work/$label-dyld.log"; then
+        echo "Package-manager code loaded; see $work/$label-dyld.log" >&2; return 1
+    fi
+}
 launch() {
     binary=$1; label=$2
-    "$binary" "$image" > "$work/$label.log" 2>&1 &
+    check_avif "$binary" "$label"
+    (sanitize_loader; exec "$binary" "$image") > "$work/$label.log" 2>&1 &
     pid=$!
     attempt=0
     while [ "$attempt" -lt 30 ]; do
@@ -58,6 +83,9 @@ codesign -dv "$work/zip/Glance.app"
 for file in MacOS/glance Resources/glance.icns Info.plist; do
     cmp "$out/Glance.app/Contents/$file" "$work/zip/Glance.app/Contents/$file"
 done
+if [ "${SKIP_NOTICES:-0}" != 1 ]; then
+    diff -r "$out/Glance.app/Contents/Resources/licenses" "$work/zip/Glance.app/Contents/Resources/licenses"
+fi
 launch "$work/zip/Glance.app/Contents/MacOS/glance" zip
 launch "$out/Glance.app/Contents/MacOS/glance" direct
 mkdir "$work/mount"
@@ -66,6 +94,9 @@ mounted=yes
 codesign --verify --deep --strict --verbose=2 "$work/mount/Glance.app"
 codesign -dv "$work/mount/Glance.app"
 [ "$(readlink "$work/mount/Applications")" = /Applications ]
+if [ "${SKIP_NOTICES:-0}" != 1 ]; then
+    diff -r "$out/Glance.app/Contents/Resources/licenses" "$work/mount/Glance.app/Contents/Resources/licenses"
+fi
 launch "$work/mount/Glance.app/Contents/MacOS/glance" dmg
 hdiutil detach "$work/mount" > "$work/unmount.log"
 mounted=no
