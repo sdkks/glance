@@ -314,6 +314,7 @@ mod tests {
                 size: [1, 1],
                 rgba: vec![0; 4],
                 levels: vec![],
+                ..Default::default()
             }))));
         assert!(prefetch.shared.mailbox.lock().unwrap().pending.is_none());
         assert!(prefetch.take_completion().image.is_none());
@@ -333,6 +334,7 @@ mod tests {
             size: [1, 1],
             rgba: vec![42; 4],
             levels: vec![],
+            ..Default::default()
         })));
         let loader = Loader {
             shared: Arc::new(shared()),
@@ -381,6 +383,7 @@ mod tests {
                     size: [1, 1],
                     rgba: vec![0; 4],
                     levels: vec![],
+                    ..Default::default()
                 })
             })
         });
@@ -424,6 +427,7 @@ mod tests {
                     size: [1, 1],
                     rgba: vec![255; 4],
                     levels: vec![],
+                    ..Default::default()
                 })),
                 ..Default::default()
             };

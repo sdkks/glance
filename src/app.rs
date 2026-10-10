@@ -526,6 +526,12 @@ impl Viewer {
             let state = match &self.display.status {
                 Status::Loading => " — Loading".to_owned(),
                 Status::Error(error) => format!(" — Error: {}: {error}", path.display()),
+                Status::Ready => self
+                    .display
+                    .image
+                    .as_ref()
+                    .and_then(|image| image.pixels.warning.as_ref())
+                    .map_or_else(String::new, |warning| format!(" — {warning}")),
                 _ => String::new(),
             };
             format!("{name}{position}{state} — glance")
@@ -1013,7 +1019,7 @@ mod tests {
             done.store(true, Ordering::Release);
             assert!(!uploads.available(frame)); // no second tile even if GPU was fast
             assert!(
-                2 * crate::tiles::tile([5000, 3000], *key, 1022).bytes()
+                2 * crate::tiles::tile([5000, 3000], *key, 1022).bytes_at_depth(4)
                     <= crate::tiles::STAGING_BYTES
             );
         }

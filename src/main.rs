@@ -1,5 +1,6 @@
 mod app;
 mod cache;
+mod color;
 mod decode;
 mod desktop;
 mod folder;

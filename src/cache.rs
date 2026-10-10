@@ -160,6 +160,7 @@ mod tests {
             size: [2, 2],
             levels: crate::levels::generate([2, 2], &rgba).unwrap(),
             rgba,
+            ..Default::default()
         };
         assert_eq!(pixels.accounted_bytes(), 36); // 16 straight + 16 base + 4 reduced.
         let mut cache = Cache::default();
