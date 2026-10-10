@@ -7,6 +7,7 @@ mod folder;
 mod levels;
 mod loader;
 mod render;
+mod settings;
 mod tiles;
 mod transform;
 mod view;

@@ -13,6 +13,7 @@ image = { version = "=0.25.10", default-features = false, features = ["jpeg", "p
 moxcms = "=0.8.1"
 half = "=2.7.1"
 rfd = "=0.17.2"
+toml_edit = { version = "=0.25.17", default-features = false, features = ["parse"] }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 objc2 = "=0.6.5"

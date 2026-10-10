@@ -127,6 +127,8 @@ pub struct Viewer {
     texture_limit: u32,
     display: Display<Arc<Image>>,
     last_title: String,
+    settings: crate::settings::Settings,
+    settings_store: crate::settings::Store,
     sort: Sort,
     view: View,
     render_state: Option<eframe::egui_wgpu::RenderState>,
@@ -156,13 +158,16 @@ impl Viewer {
                 )),
             ),
         };
+        let (settings, settings_store) = crate::settings::Store::load();
+        let mut cache = Cache::default();
+        cache.depth = settings.preload_depth;
         let mut viewer = Self {
             uploads: crate::render::Uploads::new(cc.wgpu_render_state.as_ref()),
             staging_frame: 0,
             pending_image: None,
             last_paint: None,
             prefetch,
-            cache: Cache::default(),
+            cache,
             displayed_version: None,
             displayed_generation: 0,
             prefetch_epoch: 0,
@@ -178,6 +183,8 @@ impl Viewer {
                 }),
             display,
             last_title: String::new(),
+            settings,
+            settings_store,
             sort: Sort::default(),
             view: View::default(),
             render_state: cc.wgpu_render_state.clone(),
@@ -396,7 +403,7 @@ impl Viewer {
         self.stop_prefetch();
         if let Some(folder) = &self.folder {
             self.cache.reconcile(folder, self.displayed_bytes());
-            self.prefetch_queue = neighbors(folder, self.cache.depth)
+            self.prefetch_queue = neighbors(folder, self.settings.preload_depth)
                 .into_iter()
                 .filter(|path| !self.cache.contains(path))
                 .collect();
@@ -608,7 +615,10 @@ impl Viewer {
                     } else {
                         depth.to_string()
                     };
-                    if ui.radio(self.cache.depth == depth, label).clicked() {
+                    if ui
+                        .radio(self.settings.preload_depth == depth, label)
+                        .clicked()
+                    {
                         *command = Some(Command::Depth(depth));
                         ui.close();
                     }
@@ -863,7 +873,13 @@ impl eframe::App for Viewer {
             });
         match command {
             Some(Command::Depth(depth)) => {
-                self.cache.depth = depth;
+                if self.settings.preload_depth == depth {
+                    return;
+                }
+                self.settings.preload_depth = depth;
+                self.settings_store.save(self.settings);
+                // Cache depth is derived policy, not a second preference source.
+                self.cache.depth = self.settings.preload_depth;
                 self.cache.trim(self.displayed_bytes());
                 if matches!(self.display.status, Status::Ready) {
                     self.start_prefetch();
@@ -1188,6 +1204,8 @@ mod tests {
                 ..Display::new(Status::Loading)
             },
             last_title: String::new(),
+            settings: crate::settings::Settings::default(),
+            settings_store: crate::settings::Store::session_only(),
             sort: Sort::default(),
             view: View::default(),
             render_state: None,
