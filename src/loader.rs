@@ -202,6 +202,38 @@ mod tests {
     }
 
     #[test]
+    fn new_request_releases_unadmitted_pixels_immediately() {
+        let loader = Loader {
+            shared: Arc::new(shared()),
+        };
+        {
+            let mut mailbox = loader.shared.mailbox.lock().unwrap();
+            mailbox.latest = 1;
+            mailbox.completion = Completion {
+                generation: 1,
+                image: Some(Ok(Pixels {
+                    size: [1, 1],
+                    rgba: vec![255; 4],
+                })),
+                ..Default::default()
+            };
+        }
+        loader.request(Request {
+            generation: 2,
+            path: "next.png".into(),
+            scan_folder: false,
+            texture_limit: 8192,
+            sort: Sort::default(),
+            refresh: None,
+            load_unchanged: true,
+        });
+        let mailbox = loader.shared.mailbox.lock().unwrap();
+        assert_eq!(mailbox.completion.generation, 2);
+        assert!(mailbox.completion.image.is_none());
+        assert_eq!(mailbox.pending.as_ref().unwrap().generation, 2);
+    }
+
+    #[test]
     fn rapid_requests_keep_only_latest_pending_request() {
         let loader = Loader {
             shared: Arc::new(shared()),
