@@ -27,6 +27,23 @@ fn window_icon() -> egui::IconData {
 
 fn main() -> eframe::Result {
     let initial_path = std::env::args_os().nth(1).map(std::path::PathBuf::from);
+    // Packaging diagnostic: exercise the real decoder without a desktop session.
+    if std::env::var_os("GLANCE_SMOKE_IMAGE").is_some_and(|v| v == "1") {
+        let result = initial_path
+            .as_deref()
+            .ok_or_else(|| "smoke requires an image path".to_owned())
+            .and_then(|path| decode::load(path, 16384).map_err(|error| error.to_string()));
+        match result {
+            Ok(pixels) => {
+                println!("decoded {}x{}", pixels.size[0], pixels.size[1]);
+                return Ok(());
+            }
+            Err(error) => {
+                eprintln!("{error}");
+                std::process::exit(1);
+            }
+        }
+    }
     let options = eframe::NativeOptions {
         renderer: eframe::Renderer::Wgpu,
         viewport: egui::ViewportBuilder::default()

@@ -5,3 +5,6 @@ AGENTS.md
 
 # Cargo build output.
 /target/
+
+# Downloaded native sources, staging payloads and packaging evidence.
+/build/
