@@ -972,6 +972,105 @@ python3 -m unittest discover -s scripts/tests -p 'test_notices.py'
 
 EXR/HDR, PQ/HLG, XCF and AVIF/JXL sequences remain unsupported.
 
+## Linux AppImage packaging
+
+Build **on Ubuntu 24.04 or a compatible native Linux host**, x86_64 or aarch64
+(no cross-compilation). The pinned Rust toolchain must already be installed.
+The build downloads unmodified libavif 1.4.2 and dav1d 1.5.4 sources, verifies
+SHA-256, and builds **only dav1d decoding**, with no external libyuv, AOM,
+encoders, libvmaf or libheif. Upstream libavif's own embedded BSD-3 scaling
+subset is retained and attributed. No distro AVIF library is bundled.
+
+```sh
+sudo apt-get update
+sudo apt-get install -y --no-install-recommends build-essential ca-certificates \
+  curl cmake meson ninja-build pkg-config nasm patchelf desktop-file-utils \
+  libfontconfig1-dev libxcb1-dev libxkbcommon-dev libwayland-dev libdbus-1-dev
+make appimage
+# Output: build/Glance-<version>-<x86_64|aarch64>.AppImage and .sha256
+cd build
+sha256sum -c Glance-0.1.0-aarch64.AppImage.sha256 # adapt version/architecture
+chmod +x Glance-0.1.0-aarch64.AppImage
+./Glance-0.1.0-aarch64.AppImage /absolute/path/to/image.avif
+```
+
+The version comes from `Cargo.toml`. Packaging pins appimagetool 1.9.1 and
+**type2-runtime 20251108** separately, with architecture-specific checksums;
+there is no mutable `continuous` runtime download. The AppDir contains `AppRun`,
+`usr/bin/glance`, two native `.so` files in `usr/lib`, `$ORIGIN` RUNPATHs,
+`usr/share/applications/glance.desktop` (`Icon=glance`, `Exec=glance %f`), and
+all seven committed hicolor icons. `AppRun` preserves CLI arguments and the
+caller's working directory, so relative image paths work as well.
+
+Native licenses, source hashes, embedded-source authors and hashes, and the
+AppImage runtime license/provenance are included under `usr/share/glance/licenses`.
+When `scripts/generate-notices.py` is present, the complete Rust/font/native
+notices bundle is generated under `usr/share/glance/notices`. Otherwise the build
+warns: **complete Rust/font notices are a release prerequisite**, not included
+by this standalone increment. The separate AppImage runtime embeds musl,
+libfuse (LGPL), squashfuse, zstd and zlib; its license lists those terms and
+upstream sources. Release distributors must satisfy those runtime obligations
+as well as Glance's dependency notices; Glance itself remains MIT.
+
+Build caches and evidence are kept under `build/appimage-<arch>`; serial reruns
+refresh the same payload and artifact without stray temporary directories.
+`SOURCE_DATE_EPOCH` defaults to 0 to normalize SquashFS timestamps. Reproduction
+requires the same source, Cargo lock, Rust toolchain, native build tools and OS;
+this is not a promise of byte identity across compilers/OS versions. AVIF build
+parallelism defaults to two jobs (`JOBS=4 make appimage` overrides it).
+
+The AppImage deliberately uses the system's glibc/libgcc, X11/Wayland, Vulkan/
+Mesa drivers, fonts and desktop services; it does not bundle GPU drivers or a
+whole Linux distribution. Ubuntu 24.04 is the baseline, not arbitrary older
+Linux. Normal AppImage mounting needs working FUSE (`/dev/fuse`). Older runtimes
+may require `libfuse2` (`libfuse2t64` on Ubuntu 24.04); this pinned runtime embeds
+libfuse, so that package is not normally required. In containers or without
+FUSE, use `--appimage-extract-and-run` or extract and run `squashfs-root/AppRun`.
+AppImage desktop integration is not automatic: register it with your desktop's
+AppImage integration tool or choose it via **Open With**. The embedded desktop
+entry is metadata, not an installation into your host's application database.
+
+### Linux verification recipe
+
+On a native Linux host after `make appimage`:
+
+```sh
+image="$PWD/build/Glance-0.1.0-$(uname -m).AppImage" # adapt the Cargo version
+fixture="$PWD/assets/test/web/alpha8.avif"
+mkdir -p build/appimage-check
+cd build/appimage-check
+"$image" --appimage-extract
+GLANCE_SMOKE_IMAGE=1 "$image" --appimage-extract-and-run "$fixture"
+GLANCE_SMOKE_IMAGE=1 squashfs-root/AppRun "$fixture"
+ldd squashfs-root/usr/bin/glance
+ldd squashfs-root/usr/lib/libavif.so.16
+ldd squashfs-root/usr/lib/libdav1d.so.7
+# libavif/dav1d must resolve INSIDE squashfs-root, never /usr/lib or /opt.
+desktop-file-validate squashfs-root/usr/share/applications/glance.desktop
+find squashfs-root/usr/share/icons/hicolor -name glance.png
+```
+
+Both smoke invocations must print `decoded 5x3`. The diagnostic uses the real
+bounded decoder and exits before creating a GUI; it is not a visual desktop test.
+For container verification, mount this checkout and run the same commands:
+
+```sh
+podman run --rm -v "$PWD:/src:Z" -w /src ubuntu:24.04 bash
+# Inside: install the prerequisites above, install Rust 1.97.1, make appimage,
+# then execute the extraction/ldd/desktop checks (no FUSE needed).
+```
+
+Executed here on Podman 6.0.0's native arm64 VM / Ubuntu 24.04: source-native
+build, AppImage extraction and extract-and-run AVIF decode, decoder-only closure,
+and desktop/icon layout. **UNVERIFIED**: x86_64 runtime/build, real Ubuntu desktop
+launch, file-manager Open With, folder-wide next/previous and GPU/driver behavior.
+On a stock Ubuntu desktop run `./Glance-<version>-<arch>.AppImage <file>`, open a
+folder, use Left/Right and Home/End, and open an image via the file manager;
+confirm the icon, title/count, neighboring files and AVIF rendering.
+
+EXR/Radiance HDR, PQ/HLG, XCF, AVIF/JXL sequences and Windows remain unsupported;
+packaging does not enable those formats or HDR output.
+
 ## Licensing
 
 Glance is MIT; see `LICENSE`. Direct dependencies are pinned to eframe 0.36.2

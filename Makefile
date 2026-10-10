@@ -88,3 +88,8 @@ install-linux:
 
 uninstall-linux:
 	@sh scripts/install-linux.sh uninstall "$(PREFIX)" "$(DESTDIR)" "$(DRY_RUN)" "$(SUDO)"
+
+# Linux AppImage packaging (native Linux host; see README).
+.PHONY: appimage
+appimage:
+	sh scripts/package-appimage.sh
