@@ -8,6 +8,7 @@ pub const MAX_DIMENSION: u32 = 16384;
 
 #[derive(Default)]
 pub struct Pixels {
+    pub animation_delay: Option<std::time::Duration>,
     pub size: [usize; 2],
     pub rgba: Vec<u8>,
     pub rgba16: Option<Vec<u16>>,
@@ -84,20 +85,7 @@ impl From<ImageError> for LoadError {
 
 pub fn load(path: &Path, _texture_limit: u32) -> Result<Pixels, LoadError> {
     let format = crate::formats::format(path).ok_or(LoadError::Unsupported)?;
-    let file = File::open(path)?;
-    if file.metadata()?.len() > MAX_ENCODED_BYTES {
-        return Err(LoadError::ResourceLimit(
-            "encoded input exceeds 64 MiB".into(),
-        ));
-    }
-    // Bound reads even if the file grows after the metadata check.
-    let mut encoded = Vec::new();
-    file.take(MAX_ENCODED_BYTES + 1).read_to_end(&mut encoded)?;
-    if encoded.len() as u64 > MAX_ENCODED_BYTES {
-        return Err(LoadError::ResourceLimit(
-            "encoded input exceeds 64 MiB".into(),
-        ));
-    }
+    let encoded = read_encoded(path)?;
     // image-extras explicitly does not prioritize fuzzing and may panic on bad
     // input (PCX uses unchecked palette indexing, for example). Contain unwinding
     // through construction, metadata and decoding so workers remain usable.
@@ -109,7 +97,27 @@ pub fn load(path: &Path, _texture_limit: u32) -> Result<Pixels, LoadError> {
     })
 }
 
+pub(crate) fn read_encoded(path: &Path) -> Result<Vec<u8>, LoadError> {
+    let file = File::open(path)?;
+    if file.metadata()?.len() > MAX_ENCODED_BYTES {
+        return Err(LoadError::ResourceLimit(
+            "encoded input exceeds 64 MiB".into(),
+        ));
+    }
+    let mut encoded = Vec::new();
+    file.take(MAX_ENCODED_BYTES + 1).read_to_end(&mut encoded)?;
+    if encoded.len() as u64 > MAX_ENCODED_BYTES {
+        return Err(LoadError::ResourceLimit(
+            "encoded input exceeds 64 MiB".into(),
+        ));
+    }
+    Ok(encoded)
+}
+
 fn decode_encoded(format: crate::formats::Format, encoded: Vec<u8>) -> Result<Pixels, LoadError> {
+    if let Some(frame) = crate::animation::first(format, &encoded)? {
+        return Ok(frame);
+    }
     let jpeg_cmyk = matches!(format, crate::formats::Format::Standard(ImageFormat::Jpeg))
         && crate::color::jpeg_cmyk(&encoded);
     let dimension_limit = MAX_DIMENSION;
@@ -169,6 +177,7 @@ fn decode_encoded(format: crate::formats::Format, encoded: Vec<u8>) -> Result<Pi
             rgba16: Some(rgba16),
             levels,
             warning,
+            animation_delay: None,
         })
     } else if high_depth {
         let mut rgba16 = image.into_rgba16().into_raw();
@@ -181,6 +190,7 @@ fn decode_encoded(format: crate::formats::Format, encoded: Vec<u8>) -> Result<Pi
             rgba16: Some(rgba16),
             levels,
             warning,
+            animation_delay: None,
         })
     } else {
         let mut rgba = image.into_rgba8().into_raw();
@@ -193,6 +203,7 @@ fn decode_encoded(format: crate::formats::Format, encoded: Vec<u8>) -> Result<Pi
             levels,
             warning,
             rgba16: None,
+            animation_delay: None,
         })
     }
 }

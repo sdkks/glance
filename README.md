@@ -102,8 +102,10 @@ One in-flight decode/result per worker, encoded input, decoder/conversion scratc
 GPU staging and clipboard copies are **additional bounded/transient allocations**,
 not included in the resident cache budget and not a process-RSS guarantee. A
 running synchronous prefetch codec may finish after cancellation; its stale
-result is discarded, never admitted. No neighboring animation runs; GIF/WebP
-and PNG/TIFF are decoded as static previews.
+result is discarded, never admitted. No neighboring animation runs: GIF/APNG/WebP
+prefetch decodes only the first composed frame. Animation playback is created only
+after foreground display admission. Played animation frames are not retained in
+history (reopening starts from the first frame); TIFF still uses its first page.
 
 Before navigation/sort, the foreground worker rescans and checks path, size,
 modification time and Unix device/inode/change time. Removed or changed entries
@@ -112,6 +114,50 @@ replanned in the new order. A file changing during decode produces a retryable
 error. Metadata identity is not an atomic filesystem snapshot. Decreasing depth
 trims immediately and replans; opening another folder clears neighbors/history.
 Interactive latency and menu/input feel still need human desktop verification.
+
+## Animation playback
+
+GIF, 8-bit APNG (`.png`), and animated WebP start playing when opened. The existing
+`image` decoder composes disposal, offsets and transparency; Glance does not collect
+an entire animation. GIF Netscape finite values count repetitions after the initial
+play; APNG/WebP finite values count total plays. Infinite instructions keep playing.
+A GIF without a loop instruction plays once and holds its final frame.
+
+The **Playback** menu offers Pause/Resume (`P`) and Next Frame (`.`). Pause holds the
+displayed composed frame; Resume continues its timer. Next Frame pauses, advances
+exactly one composed frame from the displayed frame, and wraps for inspection.
+These shortcuts respect typing/menu/window focus. Space remains temporary pan.
+A new file starts playing, regardless of the previous animation's pause state.
+Rotate/mirror/flip, zoom/pan and Actual Size apply to every displayed frame; Copy
+Image copies the currently displayed full composed frame with those transforms.
+
+Missing/zero delay is 100 ms; positive delays below 10 ms are clamped to 10 ms;
+longer fractional delays retain their duration. Timing uses a monotonic clock and
+cumulative deadlines, not `now + delay` after every late decode. Under load, late
+frames can be omitted from presentation, but their dependents are decoded in order.
+GPU coverage is admitted atomically; a decoding/upload error retains the prior frame.
+Manual stepping may replay composition from the beginning, so it can take longer
+in a very long animation. No seeking, speed controls, editing or slideshow is provided.
+
+The pull-driven pipeline retains the displayed frame plus at most two normalized
+lookahead/candidate frames, never a growing list across loops. Within the 512 MiB
+animation envelope, admission reserves three source-and-level payloads (each at
+most three times raw RGBA8) plus three raw compositor/reference buffers. A raw
+animation canvas must therefore fit 512 MiB / 12 (about 42.7 MiB); the existing
+16,384-pixel side and 64 MiB encoded-input limits also apply. Encoded input, GPU
+tiles/staging, cache entries, conversion scratch and clipboard copies remain
+separately bounded/transient; this is not a total-process RSS guarantee. Canceled
+synchronous decoder work may finish, but cannot publish into a replaced playback.
+Prefetch keeps only the first composed frame; history never retains played frames
+or running decoders. Changing preload depth or sort does not start neighbor playback.
+
+AVIF and JXL sequences are explicitly deferred until their static codecs exist.
+Their sequence timing adapters will follow those codecs; neither sequence playback
+nor static support for those formats is claimed here. 16-bit APNG playback is not
+supported; static 16-bit PNG is unchanged. Visual playback and pause/step feel still
+require a human desktop check. For release smoke diagnostics, set
+`GLANCE_TRACE_ANIMATION=1` to log each fully admitted animation frame to stderr;
+normal playback does not emit per-frame logs.
 
 ## Settings persistence
 
@@ -227,7 +273,7 @@ the previous displayed image and navigation remain available.
 | Format / extensions | Ordinary preview and boundaries | Source depth / metadata |
 | --- | --- | --- |
 | JPEG: `jpg`, `jpeg` | Baseline/progressive; approximate CMYK/YCCK preview | U8; ICC |
-| PNG: `png` | Static default image, not APNG playback | U8/U16; ICC and EXIF orientation |
+| PNG: `png` | Static PNG and 8-bit APNG playback | U8/U16 static; ICC and EXIF orientation |
 | TIFF: `tif`, `tiff` | Primary image; float preview described above | U8/U16/float; ICC and orientation |
 | BMP: `bmp` | Codec-supported palettes, RGB/bitfields and RLE; not all DIB variants | U8 output, including packed 16-bit RGB (not 16 bits/channel); no exposed ICC |
 | ICO: `ico` | PNG/DIB entries; upstream selects highest declared bit depth, then largest area; ties choose last directory entry | U8; nested profiles not exposed |
@@ -240,8 +286,8 @@ the previous displayed image and navigation remain available.
 | XPM: `xpm` | XPM text and named/hex colors supported by decoder; transparency; unsupported syntax/color variants fail by name | U16 RGBA even for ordinary 8-bit colors; no ICC |
 | PCX: `pcx` | Codec-supported paletted and planar RGB variants; no claim of every vintage PCX layout | U8 RGB; no ICC |
 | SGI: `sgi`, `bw`, `rgb`, `rgba` | Raw/RLE ordinary 1–4-channel images; unsupported colormap/storage variants are named errors | U8/U16; no ICC |
-| GIF: `gif` | First composited canvas frame only; animated files open without playback | U8; ICC when exposed |
-| WebP: `webp` | Lossy/lossless; animated files open first composited frame, no playback | U8; ICC and EXIF orientation |
+| GIF: `gif` | Composed animation playback; finite/infinite loops | U8; ICC when exposed |
+| WebP: `webp` | Lossy/lossless; composed animation playback | U8; ICC and EXIF orientation |
 
 New formats reuse the existing U8/U16 normalization, rendering levels and clipboard
 path; no extra HDR or high-depth fidelity guarantee is added. PNM, SGI and XPM

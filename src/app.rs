@@ -95,6 +95,8 @@ impl<T> Display<T> {
 
 #[derive(Clone, Copy)]
 enum Command {
+    Playback,
+    NextFrame,
     Depth(usize),
     Open,
     Navigate(Direction),
@@ -178,7 +180,40 @@ fn shortcuts_enabled(ctx: &egui::Context) -> bool {
         && ctx.input(|input| input.focused)
 }
 
+struct Playback {
+    worker: crate::animation::Worker,
+    clock: crate::animation::Clock,
+    origin: std::time::Instant,
+    waiting: bool,
+    manual: bool,
+    final_frame: bool,
+    displayed_index: usize,
+    candidate_index: usize,
+}
+
+impl Playback {
+    fn new(
+        version: FileVersion,
+        context: egui::Context,
+        duration: std::time::Duration,
+    ) -> Result<Self, crate::decode::LoadError> {
+        Ok(Self {
+            worker: crate::animation::Worker::new(version, context)?,
+            clock: crate::animation::Clock::new(std::time::Duration::ZERO, duration),
+            origin: std::time::Instant::now(),
+            waiting: false,
+            manual: false,
+            final_frame: false,
+            displayed_index: 0,
+            candidate_index: 0,
+        })
+    }
+}
+
 pub struct Viewer {
+    context: egui::Context,
+    animation: Option<Playback>,
+    pending_animation: bool,
     uploads: Arc<std::sync::Mutex<crate::render::Uploads>>,
     staging_frame: u64,
     pending_image: Option<(u64, Option<FileVersion>, Arc<Image>)>,
@@ -231,6 +266,9 @@ impl Viewer {
         let mut cache = Cache::default();
         cache.depth = settings.preload_depth;
         let mut viewer = Self {
+            context: cc.egui_ctx.clone(),
+            animation: None,
+            pending_animation: false,
             uploads: crate::render::Uploads::new(cc.wgpu_render_state.as_ref()),
             staging_frame: 0,
             pending_image: None,
@@ -283,7 +321,11 @@ impl Viewer {
     }
 
     fn request(&mut self, path: PathBuf, refresh: Option<(Folder, Option<Direction>)>) {
-        self.pending_image = None;
+        if matches!(self.display.status, Status::Loading) {
+            self.pending_image = None;
+            self.animation = None;
+            self.pending_animation = false;
+        }
         self.stop_prefetch();
         let Some(generation) = self.display.generation.checked_add(1) else {
             self.display
@@ -291,6 +333,9 @@ impl Viewer {
             return;
         };
         self.display.generation = generation;
+        if let Some((old_generation, _, _)) = &mut self.pending_image {
+            *old_generation = generation;
+        }
         if let Some(loader) = &self.loader {
             loader.request(Request {
                 cached: self.cache.snapshot(),
@@ -333,6 +378,9 @@ impl Viewer {
                 Ok(folder) => {
                     let selected = folder.selected_path().cloned();
                     if selected != self.selected {
+                        self.animation = None;
+                        self.pending_animation = false;
+                        self.pending_image = None;
                         if selected.is_some() {
                             self.display.loading();
                         } else {
@@ -367,6 +415,8 @@ impl Viewer {
             })
         };
         if let Some(ready) = ready {
+            self.animation = None;
+            self.pending_animation = false;
             match ready {
                 Ok(image) => self.pending_image = Some((result.generation, result.version, image)),
                 Err(error) => {
@@ -396,6 +446,28 @@ impl Viewer {
         ready: Arc<Image>,
         coverage: crate::tiles::CoverageReady,
     ) {
+        if self.pending_animation {
+            self.pending_animation = false;
+            if self.display.finish_tiles(
+                generation,
+                ready,
+                Some(coverage),
+                self.selected.clone(),
+                &mut self.view,
+            ) && let Some(playback) = &mut self.animation
+            {
+                playback.waiting = false;
+                playback.displayed_index = playback.candidate_index;
+                if std::env::var_os("GLANCE_TRACE_ANIMATION").is_some_and(|v| v == "1") {
+                    eprintln!("Animation frame {} admitted", playback.displayed_index);
+                }
+                if playback.final_frame && !playback.manual {
+                    playback.clock.step();
+                }
+                playback.manual = false;
+            }
+            return;
+        }
         let old = self
             .display
             .image
@@ -414,6 +486,7 @@ impl Viewer {
                 self.cache.admitted(version, bytes);
             }
             if let Some((image, old_version)) = old
+                && image.pixels.animation_delay.is_none()
                 && Some(&old_version) != version.as_ref()
                 && self
                     .folder
@@ -434,6 +507,19 @@ impl Viewer {
             }
             self.displayed_version = version;
             self.displayed_generation = generation;
+            self.animation = None;
+            if let Some(duration) = self
+                .display
+                .image
+                .as_ref()
+                .and_then(|image| image.pixels.animation_delay)
+                && let Some(version) = self.displayed_version.clone()
+            {
+                match Playback::new(version, self.context.clone(), duration) {
+                    Ok(playback) => self.animation = Some(playback),
+                    Err(error) => self.display.fail(error.to_string()),
+                }
+            }
             self.cache.trim(bytes);
             self.start_prefetch();
             let size = self
@@ -451,6 +537,75 @@ impl Viewer {
                 size[0],
                 size[1]
             );
+        }
+    }
+
+    fn tick_animation(&mut self, ctx: &egui::Context) {
+        let Some(playback) = &mut self.animation else {
+            return;
+        };
+        let now = playback.origin.elapsed();
+        if playback.clock.paused && !playback.manual {
+            return;
+        }
+        if self.pending_animation {
+            ctx.request_repaint();
+            return;
+        }
+        if let Some(result) = playback.worker.take() {
+            match result {
+                Err(error) => {
+                    self.display.fail(error.to_string());
+                    self.animation = None;
+                    return;
+                }
+                Ok(None) => {
+                    playback.waiting = false;
+                    playback.clock.step();
+                    return;
+                }
+                Ok(Some(frame)) => {
+                    let duration = frame
+                        .pixels
+                        .animation_delay
+                        .expect("animation frame timing");
+                    let skip = if playback.manual {
+                        playback.clock.stepped(duration);
+                        false
+                    } else {
+                        playback.clock.arrive(now, duration, frame.final_frame)
+                    };
+                    playback.final_frame = frame.final_frame;
+                    playback.candidate_index = frame.index;
+                    if skip {
+                        playback.worker.advance(None);
+                        return;
+                    }
+                    match self.upload(frame.pixels) {
+                        Ok(image) => {
+                            self.pending_animation = true;
+                            self.pending_image = Some((
+                                self.display.generation,
+                                self.displayed_version.clone(),
+                                image,
+                            ));
+                            ctx.request_repaint();
+                        }
+                        Err(error) => {
+                            self.display.fail(error);
+                            self.animation = None;
+                        }
+                    }
+                    return;
+                }
+            }
+        }
+        if !playback.waiting && playback.clock.due(now) {
+            playback.waiting = true;
+            playback.worker.advance(None);
+        }
+        if !playback.waiting {
+            ctx.request_repaint_after(playback.clock.deadline.saturating_sub(now));
         }
     }
 
@@ -678,6 +833,18 @@ impl Viewer {
                 }
             });
         });
+        ui.menu_button("Playback", |ui| {
+            ui.add_enabled_ui(self.animation.is_some(), |ui| {
+                let paused = self.animation.as_ref().is_some_and(|p| p.clock.paused);
+                menu_command(
+                    ui,
+                    if paused { "Resume  P" } else { "Pause  P" },
+                    Command::Playback,
+                    command,
+                );
+                menu_command(ui, "Next Frame  .", Command::NextFrame, command);
+            });
+        });
         ui.menu_button("Settings", |ui| {
             ui.menu_button("Preload depth", |ui| {
                 for depth in 0..=5 {
@@ -708,6 +875,8 @@ fn keyboard_command(ctx: &egui::Context) -> Option<Command> {
         command = Some(Command::Transform(Operation::Counterclockwise));
     }
     for (key, action) in [
+        (Key::P, Command::Playback),
+        (Key::Period, Command::NextFrame),
         (Key::R, Command::Transform(Operation::Clockwise)),
         (Key::M, Command::Transform(Operation::Mirror)),
         (Key::F, Command::Transform(Operation::Flip)),
@@ -750,6 +919,7 @@ impl eframe::App for Viewer {
         if let Some(prefetch) = &self.prefetch {
             self.admit_prefetch(prefetch.take_completion());
         }
+        self.tick_animation(ctx);
         self.update_title(ctx);
         if let Some(child) = &mut self.reveal_child {
             match child.try_wait() {
@@ -829,7 +999,12 @@ impl eframe::App for Viewer {
                 }
                 // Stage against the framing that will actually be committed. The
                 // previous image/view remain intact until every visible tile is ready.
-                if let Some((generation, version, image)) = self.pending_image.take()
+                if (!self.pending_animation
+                    || self
+                        .animation
+                        .as_ref()
+                        .is_some_and(|p| !p.clock.paused || p.manual))
+                    && let Some((generation, version, image)) = self.pending_image.take()
                     && generation == self.display.generation
                 {
                     let mut candidate_view = self.view.clone();
@@ -863,7 +1038,13 @@ impl eframe::App for Viewer {
                             self.pending_image = Some((generation, version, image));
                             ctx.request_repaint();
                         }
-                        Err(error) => self.display.fail(error),
+                        Err(error) => {
+                            self.display.fail(error);
+                            if self.pending_animation {
+                                self.pending_animation = false;
+                                self.animation = None;
+                            }
+                        }
                     }
                 }
                 if let Some(image) = &self.display.image {
@@ -988,6 +1169,25 @@ impl eframe::App for Viewer {
                     self.stop_prefetch();
                 }
             }
+            Some(Command::Playback) => {
+                if let Some(playback) = &mut self.animation {
+                    playback.clock.toggle(playback.origin.elapsed());
+                    ctx.request_repaint();
+                    // Pause holds an uncommitted candidate without changing the displayed frame.
+                    // Keep that candidate resident for Resume/Next Frame rather than consuming another frame.
+                }
+            }
+            Some(Command::NextFrame) => {
+                if let Some(playback) = &mut self.animation {
+                    playback.clock.step();
+                    playback.manual = true;
+                    ctx.request_repaint();
+                    playback.waiting = true;
+                    self.pending_image = None;
+                    self.pending_animation = false;
+                    playback.worker.advance(Some(playback.displayed_index));
+                }
+            }
             Some(Command::Open) => self.dialog(frame),
             Some(Command::Navigate(direction)) => self.refresh(Some(direction)),
             Some(Command::Sort(sort)) => {
@@ -1011,6 +1211,58 @@ impl eframe::App for Viewer {
 mod tests {
     use super::*;
     use crate::{decode::LoadError, folder::tests::TempDir};
+
+    #[test]
+    fn animation_shortcuts_and_same_path_frame_swaps_preserve_view_and_copy() {
+        for (key, step) in [(Key::P, false), (Key::Period, true)] {
+            let ctx = egui::Context::default();
+            let mut output = ctx.run_ui(
+                egui::RawInput {
+                    events: vec![key_event(key, false)],
+                    ..Default::default()
+                },
+                |ui| {
+                    assert!(matches!(
+                        (keyboard_command(ui.ctx()), step),
+                        (Some(Command::Playback), false) | (Some(Command::NextFrame), true)
+                    ));
+                },
+            );
+            output.textures_delta.clear();
+        }
+        let path = Some(PathBuf::from("animation.gif"));
+        let mut display = Display::new(Status::Empty);
+        let mut view = View::default();
+        let pixels = |red| {
+            Arc::new(crate::decode::Pixels {
+                size: [2, 1],
+                rgba: vec![red, 0, 0, 255, 0, red, 0, 128],
+                animation_delay: Some(std::time::Duration::from_millis(30)),
+                ..Default::default()
+            })
+        };
+        assert!(display.finish(0, Ok(pixels(100)), path.clone(), &mut view));
+        view.transform(Operation::Mirror);
+        view.actual_size();
+        let transform = view.transform;
+        let mut clock = crate::animation::Clock::new(
+            std::time::Duration::ZERO,
+            std::time::Duration::from_millis(30),
+        );
+        clock.toggle(std::time::Duration::from_millis(10));
+        for ms in [30, 100, 1000] {
+            assert!(!clock.due(std::time::Duration::from_millis(ms)));
+            assert_eq!(display.image.as_ref().unwrap().rgba[0], 100);
+        }
+        assert!(display.finish(0, Ok(pixels(200)), path, &mut view));
+        assert_eq!(view.transform, transform);
+        let copy = transform
+            .materialize(display.image.as_ref().unwrap())
+            .unwrap();
+        assert_eq!(copy.rgba, [0, 200, 0, 128, 200, 0, 0, 255]);
+        assert!(!display.finish(0, Err("truncated animation".into()), None, &mut view));
+        assert_eq!(display.image.as_ref().unwrap().rgba[0], 200);
+    }
 
     #[test]
     fn canvas_drag_with_and_without_space_moves_image() {
@@ -1691,6 +1943,9 @@ mod tests {
         let dir = TempDir::new();
         let path = dir.0.join("latest.png");
         let mut viewer = Viewer {
+            context: egui::Context::default(),
+            animation: None,
+            pending_animation: false,
             uploads: crate::render::Uploads::new(None),
             staging_frame: 0,
             pending_image: None,
@@ -1737,5 +1992,33 @@ mod tests {
         viewer.update_title(&egui::Context::default());
         assert!(viewer.last_title.contains(&path.display().to_string()));
         assert!(viewer.last_title.contains("Error:"));
+        let animation_path = dir.0.join("animation.gif");
+        let mut encoder =
+            image::codecs::gif::GifEncoder::new(std::fs::File::create(&animation_path).unwrap());
+        encoder
+            .encode_frame(image::Frame::new(image::RgbaImage::from_pixel(
+                1,
+                1,
+                image::Rgba([255; 4]),
+            )))
+            .unwrap();
+        drop(encoder);
+        let version = FileVersion::read(&animation_path).unwrap();
+        let duration = std::time::Duration::from_millis(100);
+        let mut playback =
+            Playback::new(version.clone(), viewer.context.clone(), duration).unwrap();
+        playback.clock.toggle(std::time::Duration::ZERO);
+        assert!(playback.clock.paused);
+        viewer.animation = Some(playback);
+        viewer.open(animation_path);
+        assert!(
+            viewer.animation.is_none(),
+            "new selection cancels paused playback"
+        );
+        assert!(!viewer.pending_animation);
+        // The same construction seam used on successful admission never inherits pause.
+        let restarted = Playback::new(version, viewer.context.clone(), duration).unwrap();
+        assert!(!restarted.clock.paused);
+        assert_eq!(restarted.displayed_index, 0);
     }
 }
