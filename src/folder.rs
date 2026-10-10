@@ -24,8 +24,7 @@ impl Folder {
         let mut files = Vec::new();
         for entry in fs::read_dir(parent)? {
             let entry = entry?;
-            let name = entry.file_name();
-            if name.as_encoded_bytes().starts_with(b".") || !eligible(&entry.path()) {
+            if hidden_entry(&entry) || !eligible(&entry.path()) {
                 continue;
             }
             // Follow file symlinks, but never descend into directories.
@@ -86,6 +85,25 @@ pub fn eligible(path: &std::path::Path) -> bool {
             .iter()
             .any(|allowed| extension.as_encoded_bytes().eq_ignore_ascii_case(allowed))
     })
+}
+
+fn hidden_entry(entry: &fs::DirEntry) -> bool {
+    #[cfg(target_os = "macos")]
+    let flags = {
+        use std::os::macos::fs::MetadataExt;
+        entry
+            .metadata()
+            .map(|metadata| metadata.st_flags())
+            .unwrap_or(0)
+    };
+    #[cfg(not(target_os = "macos"))]
+    let flags = 0;
+    hidden_name_or_flags(&entry.file_name(), flags)
+}
+
+fn hidden_name_or_flags(name: &OsStr, flags: u32) -> bool {
+    const UF_HIDDEN: u32 = 0x8000;
+    name.as_encoded_bytes().starts_with(b".") || flags & UF_HIDDEN != 0
 }
 
 fn compare_names(a: &OsStr, b: &OsStr) -> Ordering {
@@ -152,6 +170,37 @@ pub(crate) mod tests {
         fn drop(&mut self) {
             fs::remove_dir_all(&self.0).unwrap();
         }
+    }
+
+    #[test]
+    fn hidden_names_and_finder_flags() {
+        assert!(hidden_name_or_flags(OsStr::new(".hidden.png"), 0));
+        assert!(hidden_name_or_flags(OsStr::new("image.png"), 0x8000));
+        assert!(hidden_name_or_flags(OsStr::new("image.png"), 0x8002));
+        assert!(!hidden_name_or_flags(OsStr::new("image.png"), 0x0002));
+        assert!(!hidden_name_or_flags(OsStr::new("image.png"), 0));
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn finder_hidden_file_is_excluded_unless_explicitly_opened() {
+        let dir = TempDir::new();
+        let hidden = dir.0.join("hidden.png");
+        let visible = dir.0.join("visible.png");
+        fs::write(&hidden, b"image").unwrap();
+        fs::write(&visible, b"image").unwrap();
+        let status = std::process::Command::new("/usr/bin/chflags")
+            .arg("hidden")
+            .arg(&hidden)
+            .status()
+            .unwrap();
+        assert!(status.success());
+
+        let folder = Folder::open(dir.0.clone()).unwrap();
+        assert_eq!(folder.files.as_slice(), std::slice::from_ref(&visible));
+        let folder = Folder::open(hidden.clone()).unwrap();
+        assert_eq!(folder.selected_path(), Some(&hidden));
+        assert_eq!(folder.files, [hidden, visible]);
     }
 
     #[test]
