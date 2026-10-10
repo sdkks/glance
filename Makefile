@@ -64,3 +64,19 @@ audit:
 machete:
 	@cargo machete --version >/dev/null 2>&1 || { printf '%s\n' 'cargo-machete missing; see README installation commands.' >&2; exit 1; }
 	cargo machete
+
+# Linux source-prefix installation (independent of artifact packaging).
+PREFIX ?= $(HOME)/.local
+DESTDIR ?=
+DRY_RUN ?= 0
+SUDO ?= 0
+.PHONY: install-linux uninstall-linux help-linux
+help: help-linux
+help-linux:
+	@printf '%s\n' '  install-linux    Build/install into PREFIX (default ~/.local; DRY_RUN=1 previews)' '  uninstall-linux  Remove unchanged manifest-owned files from PREFIX'
+
+install-linux:
+	@sh scripts/install-linux.sh install "$(PREFIX)" "$(DESTDIR)" "$(DRY_RUN)" "$(SUDO)"
+
+uninstall-linux:
+	@sh scripts/install-linux.sh uninstall "$(PREFIX)" "$(DESTDIR)" "$(DRY_RUN)" "$(SUDO)"

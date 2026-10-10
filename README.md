@@ -676,6 +676,69 @@ That alternative is not a project dependency, has not been validated here, and
 need not match sips bytes; `.icns` regeneration still requires macOS.
 See `THIRD_PARTY.md` for the human-supplied artwork provenance.
 
+## Installing on Linux (source)
+
+With the Rust toolchain and Linux development libraries described above installed:
+
+```sh
+make install-linux DRY_RUN=1  # prints build/filesystem/cache actions; writes nothing
+make install-linux           # builds release; defaults to PREFIX="$HOME/.local"
+export PATH="$HOME/.local/bin:$PATH"
+glance /absolute/path/to/image.png
+make uninstall-linux DRY_RUN=1
+make uninstall-linux
+```
+
+`PREFIX` must be an absolute canonical path (no dot components or repeated
+slashes). Override it with `make install-linux PREFIX=/absolute/path`.
+`DESTDIR` is an optional absolute staging root prepended to `PREFIX`, for example
+`make install-linux PREFIX=/usr DESTDIR=/tmp/glance-stage`. Use the **same**
+`PREFIX` and `DESTDIR` for uninstall. Unstaged system prefixes such as `/usr` and
+`/usr/local` require explicit `SUDO=1` confirmation; this flag never runs sudo
+or grants permissions. The installer refuses to overwrite files without its
+own existing manifest. Reinstallation is allowed when all owned files are unchanged.
+
+The installed layout is `bin/glance`, `share/applications/glance.desktop`
+(`Exec=glance %f`, `TryExec=glance`, `Icon=glance`), and
+`share/icons/hicolor/{16,24,32,48,64,128,256}x{same}/apps/glance.png`.
+Supported image MIME associations are advertised; AVIF requires the native
+libraries described above. No custom MIME XML or default-app override is installed.
+Your desktop must search this prefix, and `glance` must be on its session PATH;
+a custom prefix is not automatically a desktop search path.
+
+`share/glance/install-manifest` records checksums and exact installed paths.
+Uninstall validates the entire manifest and refuses to delete anything if a file
+was modified or replaced. A missing manifest warns and leaves everything alone.
+Only these files and the manifest are deleted, **not shared directories**, user
+settings, or other applications. Empty directories intentionally remain.
+`update-desktop-database` and `update-mime-database` are optional, nonfatal, and
+run only for an unstaged `$HOME/.local` install/uninstall; MIME refresh also
+requires an existing `share/mime` directory. Custom/staged prefixes skip caches.
+
+Real Linux menu/icon discovery, associations, native dependencies, and cache
+refresh are **UNVERIFIED** on the macOS development machine. On Linux, run:
+
+```sh
+make verify && make audit && make machete
+sh scripts/test-install-linux.sh  # scratch-prefix install/uninstall isolation test
+make install-linux DRY_RUN=1
+make install-linux
+command -v glance
+ldd "$HOME/.local/bin/glance"
+desktop-file-validate "$HOME/.local/share/applications/glance.desktop" # if available
+# Log out/in if needed; launch Glance from the menu and use Open With on a PNG.
+# Confirm the icon and image opening; this does not change your default viewer.
+make uninstall-linux
+```
+
+For the standalone scratch test, `scratch=$(mktemp -d)` then
+`make install-linux PREFIX="$scratch/prefix"` and
+`make uninstall-linux PREFIX="$scratch/prefix"` stage nothing in your home.
+The automated script additionally checks unrelated sentinel files, modification
+refusal, a missing manifest, dry-run, system-prefix guards, and DESTDIR staging.
+It prints its temporary path and the exact file lists and retains the scratch
+directory for inspection. The macOS scratch binary is not a Linux executable.
+
 ## Releasing
 
 `Cargo.toml`'s `[package] version` is the single source of truth. These local

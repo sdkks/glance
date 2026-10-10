@@ -1,0 +1,9 @@
+[Desktop Entry]
+Name=Glance
+Exec=glance %f
+TryExec=glance
+Icon=glance
+Terminal=false
+Type=Application
+Categories=Graphics;Viewer;
+MimeType=image/jpeg;image/png;image/tiff;image/bmp;image/vnd.microsoft.icon;image/x-icns;image/x-tga;image/x-portable-anymap;image/x-portable-bitmap;image/x-portable-graymap;image/x-portable-pixmap;image/x-portable-arbitrarymap;image/vnd.wap.wbmp;image/x-xbitmap;image/x-xpixmap;image/x-pcx;image/sgi;image/gif;image/webp;image/vnd.adobe.photoshop;image/openraster;image/x-krita;image/jxl;image/svg+xml;image/svg+xml-compressed;image/avif;
