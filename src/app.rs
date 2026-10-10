@@ -181,8 +181,6 @@ fn shortcuts_enabled(ctx: &egui::Context) -> bool {
 pub struct Viewer {
     uploads: Arc<std::sync::Mutex<crate::render::Uploads>>,
     staging_frame: u64,
-    // Temporary native-input diagnostic; read once, never allocate extra responses.
-    input_trace: bool,
     pending_image: Option<(u64, Option<FileVersion>, Arc<Image>)>,
     last_paint: Option<egui::PaintCallback>,
     prefetch: Option<Loader>,
@@ -235,7 +233,6 @@ impl Viewer {
         let mut viewer = Self {
             uploads: crate::render::Uploads::new(cc.wgpu_render_state.as_ref()),
             staging_frame: 0,
-            input_trace: std::env::var("GLANCE_INPUT_TRACE").is_ok_and(|value| value == "1"),
             pending_image: None,
             last_paint: None,
             prefetch,
@@ -869,9 +866,6 @@ impl eframe::App for Viewer {
                         Err(error) => self.display.fail(error),
                     }
                 }
-                let mut trace_center = None;
-                let mut trace_enlarged = false;
-                let mut trace_pan_delta = egui::Vec2::ZERO;
                 if let Some(image) = &self.display.image {
                     let mut size = self.view.transform.size(image.size);
                     let ppp = ctx.pixels_per_point();
@@ -892,7 +886,6 @@ impl eframe::App for Viewer {
                         let enlarged = self.view.enlarged(canvas, size, ppp);
                         let delta = self.space_pan.pan_delta(&response, enlarged);
                         self.view.pan(delta, canvas, size, ppp);
-                        trace_pan_delta = delta;
                         let moving = delta != egui::Vec2::ZERO || response.dragged();
                         if (response.hovered() || response.dragged())
                             && let Some(cursor) = self.space_pan.cursor(enlarged, moving)
@@ -936,10 +929,6 @@ impl eframe::App for Viewer {
                             });
                         }
                     }
-                    if self.input_trace {
-                        trace_center = Some(self.view.rect(canvas, size, ppp).center());
-                        trace_enlarged = self.view.enlarged(canvas, size, ppp);
-                    }
                     if canvas.is_positive()
                         && let Some(state) = &self.render_state
                     {
@@ -981,42 +970,6 @@ impl eframe::App for Viewer {
                             }
                         });
                     });
-                }
-                if self.input_trace && !ctx.will_discard() {
-                    let (primary_down, pointer_delta, space_down, focused) = ctx.input(|input| {
-                        (
-                            input.pointer.primary_down(),
-                            input.pointer.delta(),
-                            input.key_down(Key::Space),
-                            input.focused,
-                        )
-                    });
-                    eprintln!(
-                        "input frame={} space_held_active={} held={} space_down={} primary_down={} dragged={} dragged_primary={} drag_delta={:?} pointer_delta={:?} pan_delta={:?} keyboard_wants={} focus_id={:?} window_focused={} shortcuts={} popup={} cancelled={} hovered={} contains={} cursor={:?} canvas_id={:?} canvas_rect={:?} space_response=none enlarged={} center={:?}",
-                        ctx.cumulative_frame_nr(),
-                        self.space_pan.active(trace_enlarged),
-                        self.space_pan.held,
-                        space_down,
-                        primary_down,
-                        response.dragged(),
-                        response.dragged_by(egui::PointerButton::Primary),
-                        response.drag_delta(),
-                        pointer_delta,
-                        trace_pan_delta,
-                        ctx.egui_wants_keyboard_input(),
-                        ctx.memory(|memory| memory.focused()),
-                        focused,
-                        crate::app::shortcuts_enabled(&ctx),
-                        egui::Popup::is_any_open(&ctx),
-                        self.space_pan.cancelled_drag,
-                        response.hovered(),
-                        response.contains_pointer(),
-                        ctx.output(|output| output.cursor_icon),
-                        response.id,
-                        response.interact_rect,
-                        trace_enlarged,
-                        trace_center,
-                    );
                 }
             });
         match command {
@@ -1740,7 +1693,6 @@ mod tests {
         let mut viewer = Viewer {
             uploads: crate::render::Uploads::new(None),
             staging_frame: 0,
-            input_trace: false,
             pending_image: None,
             last_paint: None,
             prefetch: None,
