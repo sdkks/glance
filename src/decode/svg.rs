@@ -1,3 +1,5 @@
+pub mod worker;
+
 use super::{LoadError, MAX_DIMENSION, MAX_ENCODED_BYTES, Pixels, checked_size};
 use resvg::{tiny_skia, usvg};
 use std::{
@@ -7,6 +9,20 @@ use std::{
         atomic::{AtomicBool, Ordering},
     },
 };
+
+pub struct Document {
+    tree: usvg::Tree,
+    pub size: [usize; 2],
+}
+
+impl Document {
+    pub fn rasterize(self: &Arc<Self>, scale: f32) -> Result<Pixels, LoadError> {
+        let mut pixels = rasterize(&self.tree, scale)?;
+        pixels.svg = Some(Arc::clone(self));
+        pixels.svg_scale = scale;
+        Ok(pixels)
+    }
+}
 
 pub(super) fn decode(encoded: &[u8], gzip: bool) -> Result<Pixels, LoadError> {
     let xml = if gzip {
@@ -103,13 +119,23 @@ pub(super) fn decode(encoded: &[u8], gzip: bool) -> Result<Pixels, LoadError> {
             "SVG: external/nested images or embedded raster exceeding 4096 pixels / 64 MiB".into(),
         ));
     }
-    rasterize(&tree, 1.0)
+    let size = raster_size(&tree, 1.0)?;
+    Arc::new(Document { tree, size }).rasterize(1.0)
+}
+
+fn raster_size(tree: &usvg::Tree, scale: f32) -> Result<[usize; 2], LoadError> {
+    if !scale.is_finite() || scale <= 0.0 {
+        return Err(LoadError::ResourceLimit("SVG: invalid raster scale".into()));
+    }
+    let width = (tree.size().width() * scale).ceil() as u32;
+    let height = (tree.size().height() * scale).ceil() as u32;
+    checked_size(width, height, MAX_DIMENSION)
+        .map_err(|e| LoadError::ResourceLimit(format!("SVG raster: {e}")))
 }
 
 fn rasterize(tree: &usvg::Tree, scale: f32) -> Result<Pixels, LoadError> {
-    let width = (tree.size().width() * scale).ceil() as u32;
-    let height = (tree.size().height() * scale).ceil() as u32;
-    let size = checked_size(width, height, MAX_DIMENSION)?;
+    let size = raster_size(tree, scale)?;
+    let [width, height] = size.map(|n| n as u32);
     let mut pixmap = tiny_skia::Pixmap::new(width, height)
         .ok_or_else(|| LoadError::ResourceLimit("SVG: raster allocation failed".into()))?;
     resvg::render(
@@ -148,6 +174,9 @@ mod tests {
             let p = rasterize(&tree, scale).unwrap();
             assert_eq!(p.size, [(20.0 * scale) as usize, (10.0 * scale) as usize]);
             assert_eq!(&p.rgba[..4], &[255, 0, 0, 128]);
+            let edge = (10.0 * scale) as usize;
+            assert_eq!(&p.rgba[(edge - 1) * 4..edge * 4], &[255, 0, 0, 128]);
+            assert_eq!(&p.rgba[edge * 4..(edge + 1) * 4], &[0, 0, 0, 0]);
             assert_eq!(&p.rgba[(p.size[0] - 1) * 4..p.size[0] * 4], &[0, 0, 0, 0]);
         }
         let p = decode(XML, false).unwrap();
@@ -157,6 +186,41 @@ mod tests {
         assert_eq!(copy.rgba, p.rgba);
         assert_eq!(copy.size, [20, 10]);
     }
+    #[test]
+    fn raster_caps_fail_by_name_before_allocation() {
+        let p = decode(XML, false).unwrap();
+        let document = p.svg.unwrap();
+        for scale in [0.0, f32::NAN, f32::INFINITY, 1000.0] {
+            let error = document.rasterize(scale).err().unwrap();
+            assert!(matches!(error, LoadError::ResourceLimit(_)));
+            assert!(error.to_string().contains("SVG"));
+        }
+        let tree = usvg::Tree::from_data(
+            b"<svg xmlns='http://www.w3.org/2000/svg' width='100' height='100'/>",
+            &usvg::Options::default(),
+        )
+        .unwrap();
+        assert!(raster_size(&tree, 115.0).is_ok());
+        assert!(matches!(
+            raster_size(&tree, 116.0),
+            Err(LoadError::ResourceLimit(_))
+        ));
+    }
+
+    #[test]
+    fn fractional_edge_proves_fresh_vector_raster_not_bitmap_magnification() {
+        let p = decode(b"<svg xmlns='http://www.w3.org/2000/svg' width='100' height='100'><rect width='10.5' height='100' fill='red'/></svg>", false).unwrap();
+        let zoomed = p.svg.as_ref().unwrap().rasterize(2.0).unwrap();
+        assert!(p.rgba[10 * 4 + 3] > 0 && p.rgba[10 * 4 + 3] < 255);
+        assert_eq!(zoomed.rgba[20 * 4 + 3], 255);
+        assert_eq!(zoomed.rgba[21 * 4 + 3], 0);
+        assert_eq!(zoomed.size, [200, 200]);
+        assert_eq!(
+            zoomed.svg.as_ref().unwrap().rasterize(1.0).unwrap().rgba,
+            p.rgba
+        );
+    }
+
     #[test]
     fn gzip_and_named_rejections() {
         use std::io::Write;
