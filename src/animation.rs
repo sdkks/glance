@@ -12,22 +12,72 @@ use std::{
 
 /// Default 50 fps ceiling; fractional delays above this floor remain intact.
 pub const MIN_FRAME_DELAY: Duration = Duration::from_millis(20);
-const SHORT_DELAY_THRESHOLD_MS: f64 = 10.0;
 const FALLBACK_FRAME_DELAY: Duration = Duration::from_millis(100);
 
-pub fn delay(value: Option<(u32, u32)>) -> Duration {
-    match value {
-        None | Some((0, _)) | Some((_, 0)) => FALLBACK_FRAME_DELAY,
-        Some((n, d)) => {
-            let ms = f64::from(n) / f64::from(d);
-            // Browser-compatible: 0–1 centisecond delays use 100 ms, not a fast floor.
-            if ms <= SHORT_DELAY_THRESHOLD_MS {
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum Rate {
+    #[default]
+    HonorFile,
+    Exact,
+    Fps30,
+    Fps24,
+    Fps15,
+    Fps10,
+    Off,
+}
+
+impl Rate {
+    pub const ALL: [(Self, &'static str, &'static str); 7] = [
+        (Self::HonorFile, "Honor file (max 50 fps)", "honor-file"),
+        (Self::Exact, "Honor file exactly", "exact"),
+        (Self::Fps30, "30 fps", "30-fps"),
+        (Self::Fps24, "24 fps", "24-fps"),
+        (Self::Fps15, "15 fps", "15-fps"),
+        (Self::Fps10, "10 fps", "10-fps"),
+        (Self::Off, "Off (first frame only)", "off"),
+    ];
+
+    pub fn key(self) -> &'static str {
+        Self::ALL
+            .iter()
+            .find(|entry| entry.0 == self)
+            .expect("all rates")
+            .2
+    }
+
+    pub fn parse(key: &str) -> Self {
+        Self::ALL
+            .iter()
+            .find(|entry| entry.2 == key)
+            .map_or(Self::default(), |entry| entry.0)
+    }
+
+    /// Off has no automatic interval; manual stepping still uses the default delay.
+    pub fn interval(self, encoded: Duration) -> Duration {
+        match self {
+            Self::HonorFile | Self::Off if encoded <= Duration::from_millis(10) => {
                 FALLBACK_FRAME_DELAY
-            } else {
-                Duration::from_secs_f64(ms / 1000.0).max(MIN_FRAME_DELAY)
             }
+            Self::HonorFile | Self::Off => encoded.max(MIN_FRAME_DELAY),
+            Self::Exact => encoded.max(Duration::from_millis(5)),
+            Self::Fps30 => Duration::from_secs_f64(1.0 / 30.0),
+            Self::Fps24 => Duration::from_secs_f64(1.0 / 24.0),
+            Self::Fps15 => Duration::from_secs_f64(1.0 / 15.0),
+            Self::Fps10 => Duration::from_millis(100),
         }
     }
+}
+
+fn encoded_delay(value: Option<(u32, u32)>) -> Duration {
+    match value {
+        None | Some((_, 0)) => FALLBACK_FRAME_DELAY,
+        Some((n, d)) => Duration::from_secs_f64(f64::from(n) / f64::from(d) / 1000.0),
+    }
+}
+
+#[cfg(test)]
+pub fn delay(value: Option<(u32, u32)>) -> Duration {
+    Rate::default().interval(encoded_delay(value))
 }
 
 // image maps an absent GIF extension to Infinite. Walk container blocks (never
@@ -191,7 +241,7 @@ impl Stream {
             return Ok(None);
         };
         let frame = frame?;
-        let timing = delay(Some(frame.delay().numer_denom_ms()));
+        let timing = encoded_delay(Some(frame.delay().numer_denom_ms()));
         let mut image = image::DynamicImage::ImageRgba8(frame.into_buffer());
         image.apply_orientation(self.orientation);
         let size = [image.width() as usize, image.height() as usize];
@@ -215,6 +265,7 @@ impl Stream {
 pub struct Clock {
     pub paused: bool,
     pub deadline: Duration,
+    pub rate: Rate,
     remaining: Duration,
 }
 impl Clock {
@@ -222,8 +273,14 @@ impl Clock {
         Self {
             paused: false,
             deadline: now.saturating_add(duration),
+            rate: Rate::default(),
             remaining: duration,
         }
+    }
+    pub fn set_rate(&mut self, now: Duration, encoded: Duration, rate: Rate) {
+        self.rate = rate;
+        self.remaining = rate.interval(encoded);
+        self.deadline = now.saturating_add(self.remaining);
     }
     pub fn toggle(&mut self, now: Duration) {
         if self.paused {
@@ -241,7 +298,7 @@ impl Clock {
         !final_frame && self.due(now)
     }
     pub fn due(&self, now: Duration) -> bool {
-        !self.paused && now >= self.deadline
+        self.rate != Rate::Off && !self.paused && now >= self.deadline
     }
     pub fn step(&mut self) {
         self.paused = true;
@@ -330,6 +387,14 @@ impl Worker {
             state.advance = Some((state.serial, target));
             state.result = None;
             self.shared.wake.notify_one();
+        }
+    }
+    pub fn cancel(&self) {
+        let mut state = self.shared.state.lock().expect("animation lock");
+        if !state.closed {
+            state.serial = state.serial.saturating_add(1);
+            state.advance = None;
+            state.result = None;
         }
     }
     pub fn take(&self) -> Option<Result<Option<Frame>, LoadError>> {
@@ -475,6 +540,59 @@ mod fixtures;
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn rate_interval_table_and_exact_safety_floor() {
+        let ms = Duration::from_millis;
+        for (rate, _, _) in Rate::ALL {
+            for (cs, default) in [
+                (0, 100),
+                (1, 100),
+                (2, 20),
+                (5, 50),
+                (10, 100),
+                (20, 200),
+                (50, 500),
+            ] {
+                let expected = match rate {
+                    Rate::HonorFile | Rate::Off => ms(default),
+                    Rate::Exact => ms(cs * 10).max(ms(5)),
+                    Rate::Fps30 => Duration::from_nanos(33_333_333),
+                    Rate::Fps24 => Duration::from_nanos(41_666_667),
+                    Rate::Fps15 => Duration::from_nanos(66_666_667),
+                    Rate::Fps10 => ms(100),
+                };
+                assert_eq!(rate.interval(ms(cs * 10)), expected, "{rate:?}: {cs} cs");
+            }
+        }
+        for value in [0, 1, 4, 5] {
+            assert_eq!(Rate::Exact.interval(ms(value)), ms(5));
+        }
+        assert_eq!(
+            Rate::Exact.interval(Duration::from_micros(12500)),
+            Duration::from_micros(12500)
+        );
+    }
+
+    #[test]
+    fn live_rate_recomputes_deadline_and_preserves_pause() {
+        let ms = Duration::from_millis;
+        let mut clock = Clock::new(ms(0), ms(500));
+        clock.set_rate(ms(40), ms(500), Rate::Fps10);
+        assert_eq!(clock.deadline, ms(140));
+        clock.advance(ms(100));
+        assert_eq!(clock.deadline, ms(240)); // subsequent deadlines stay cumulative
+        clock.toggle(ms(50));
+        clock.set_rate(ms(60), ms(20), Rate::Exact);
+        assert!(clock.paused);
+        clock.toggle(ms(1000));
+        assert_eq!(clock.deadline, ms(1020));
+        clock.set_rate(ms(1010), ms(20), Rate::Off);
+        assert!(!clock.due(ms(999999)));
+        clock.step();
+        clock.stepped(ms(50));
+        assert!(clock.paused);
+    }
+
     #[test]
     fn normalization_matrix() {
         for (input, ms) in [

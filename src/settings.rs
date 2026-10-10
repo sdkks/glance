@@ -9,30 +9,41 @@ use std::{
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Settings {
     pub preload_depth: usize,
+    pub animation_rate: crate::animation::Rate,
 }
 
 impl Default for Settings {
     fn default() -> Self {
-        Self { preload_depth: 1 }
+        Self {
+            preload_depth: 1,
+            animation_rate: Default::default(),
+        }
     }
 }
 
 impl Settings {
     fn parse(text: &str) -> Result<Self, String> {
         let document = toml_edit::Document::parse(text).map_err(|e| e.to_string())?;
-        let Some(value) = document.get("preload-depth") else {
-            return Ok(Self::default());
-        };
-        match value.as_integer() {
-            Some(depth @ 0..=5) => Ok(Self {
-                preload_depth: depth as usize,
-            }),
-            _ => Err("preload-depth must be an integer from 0 (Off) through 5".into()),
+        let mut settings = Self::default();
+        if let Some(value) = document.get("preload-depth") {
+            settings.preload_depth = match value.as_integer() {
+                Some(depth @ 0..=5) => depth as usize,
+                _ => return Err("preload-depth must be an integer from 0 (Off) through 5".into()),
+            };
         }
+        settings.animation_rate = document
+            .get("animation-rate")
+            .and_then(|value| value.as_str())
+            .map_or(Default::default(), crate::animation::Rate::parse);
+        Ok(settings)
     }
 
     fn text(self) -> String {
-        format!("preload-depth = {}\n", self.preload_depth)
+        format!(
+            "preload-depth = {}\nanimation-rate = \"{}\"\n",
+            self.preload_depth,
+            self.animation_rate.key()
+        )
     }
 }
 
@@ -153,12 +164,51 @@ mod tests {
     use crate::folder::tests::TempDir;
 
     #[test]
+    fn animation_rates_roundtrip_and_invalid_values_preserve_depth() {
+        let dir = TempDir::new();
+        let path = dir.0.join("settings.toml");
+        for (animation_rate, _, _) in crate::animation::Rate::ALL {
+            let settings = Settings {
+                preload_depth: 3,
+                animation_rate,
+            };
+            let mut store = Store {
+                path: Some(path.clone()),
+            };
+            store.save(settings);
+            assert_eq!(Store::load_at(Some(path.clone())).0, settings);
+        }
+        for value in ["'future'", "42", "false", "[]", "{}"] {
+            let text = format!("preload-depth = 4\nanimation-rate = {value}\n");
+            fs::write(&path, text).unwrap();
+            assert_eq!(
+                Store::load_at(Some(path.clone())).0,
+                Settings {
+                    preload_depth: 4,
+                    ..Default::default()
+                }
+            );
+        }
+        assert_eq!(
+            Settings::parse("animation-rate = 'exact'")
+                .unwrap()
+                .animation_rate,
+            crate::animation::Rate::Exact
+        );
+        assert_eq!(
+            Settings::parse("preload-depth = 4").unwrap().animation_rate,
+            crate::animation::Rate::default()
+        );
+    }
+
+    #[test]
     fn roundtrip_all_depths() {
         let dir = TempDir::new();
         let path = dir.0.join("config/settings.toml");
         for depth in 0..=5 {
             let settings = Settings {
                 preload_depth: depth,
+                ..Default::default()
             };
             let mut store = Store {
                 path: Some(path.clone()),
@@ -262,8 +312,16 @@ mod tests {
     fn atomic_replacement_is_complete_and_cleans_temporary_files() {
         let dir = TempDir::new();
         let path = dir.0.join("settings.toml");
-        let first = Settings { preload_depth: 0 }.text();
-        let second = Settings { preload_depth: 5 }.text();
+        let first = Settings {
+            preload_depth: 0,
+            ..Default::default()
+        }
+        .text();
+        let second = Settings {
+            preload_depth: 5,
+            ..Default::default()
+        }
+        .text();
         atomic_write(&path, first.as_bytes()).unwrap();
         std::thread::scope(|scope| {
             scope.spawn(|| {
@@ -293,7 +351,10 @@ mod tests {
         let path = dir.0.join("settings.toml");
         fs::create_dir(&path).unwrap(); // rename over a directory must fail
         let mut store = Store { path: Some(path) };
-        store.save(Settings { preload_depth: 5 });
+        store.save(Settings {
+            preload_depth: 5,
+            ..Default::default()
+        });
         assert!(store.path.is_none());
         assert_eq!(fs::read_dir(&dir.0).unwrap().count(), 1);
     }
