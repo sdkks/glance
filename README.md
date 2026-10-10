@@ -12,20 +12,39 @@ make build
 ./target/release/glance /absolute/path/to/image.png
 ```
 
-Open with ⌘O on macOS / Ctrl+O on Linux, the **Open…** button in empty/loading/error
-states, or the canvas's right-click **Open…** action. Files and folders can also be
-dropped onto the window. A directory opens its first eligible image. Folder
-browsing is nonrecursive, skips dot-prefixed names, and sorts names naturally
-(`image2` before `image10`), with ASCII case folding and exact-name tie breaks.
-Explicitly opened hidden or missing files remain selected. Corrupt files stay in
-the list and show a named error; navigation and Open remain available.
+Open with ⌘O on macOS / Ctrl+O on Linux, **File → Open…**, the **Open…** button
+in empty/loading/error states, or the canvas's right-click menu. Files and folders
+can also be dropped onto the window. A directory opens its first eligible image.
+Folder browsing is nonrecursive and skips dot-prefixed/Finder-hidden names.
+Explicitly opened hidden or missing files remain selected on opening. Corrupt
+files stay in the list and show a named error; navigation and Open remain available.
 
-Left/Right select previous/next; Home/End select first/last. Navigation stops at
-the ends. The title reports filename and position/count. Images are fitted and
-centered without enlarging small images (source size is measured in physical
-pixels). A single background worker holds one replaceable pending selection;
-only the current generation may be displayed. Settled images have no application
-repaint timer.
+Left/Right select previous/next; Home/End select first/last, without wrapping.
+The **Navigate → Sort** submenu offers natural Name A→Z/Z→A, Size largest/smallest
+first, and Modified newest/oldest first, indicating the active choice. Sort
+persists for this session, including across Open. Before every navigation or sort,
+a worker rescans the folder and reads current metadata. Sorting preserves the
+selected path, not its index. If the current file disappears, navigation uses the
+old order to find a surviving neighbor in the requested direction (then the other
+direction at a boundary). New files join the snapshot; missing files leave it.
+Natural names use ASCII case folding and numeric-run comparison (`image2` before
+`image10`), then exact-name ties; metadata ties use this same ascending name order
+in either direction. Unavailable metadata sorts before known values in ascending
+metadata order and after known values in descending order.
+
+Images start centered at Fit without enlarging small images. **View → Fit** (`0`
+or `1`) recenters; **Actual Size (100%)** (`2`) displays one source pixel per
+physical screen pixel, including HiDPI. `+` (or `=`) and `−` zoom about the canvas
+center. A line-unit mouse wheel zooms at the pointer, clamped to 0.01×–500×.
+Drag or two-axis point-unit trackpad scrolling pans when the image exceeds the
+viewport; scrolling never navigates. Ctrl/Command+scroll also zooms at the pointer.
+Fit and all zoom/pan state reset on file change. Menus are keyboard-accessible
+with Tab/Shift+Tab to focus and Enter/Space to activate; viewer shortcuts are
+suppressed while menus or another control own focus.
+
+The title reports filename and position/count. A single background worker holds
+one replaceable pending selection; only the current generation may be displayed.
+Settled images have no application repaint timer.
 
 ## Current limits and remaining work
 
@@ -38,13 +57,17 @@ and GPU/native allocations may coexist. One worker and bounded pending/result
 slots prevent growth per keypress. These are interim limits, not the future
 full-detail large-image envelope.
 
-Embedded orientation is applied once. Presentation currently uses an egui RGBA8
-texture with linear filtering. Deliberate ICC/SDR conversion, high-depth
-presentation, strong minification, and oversized-image tiling are **not implemented
+Embedded orientation is applied once. Presentation currently uses an image-only
+wgpu paint callback with an sRGB RGBA8 texture and linear sampling. Transparency
+is composited over the dark canvas in linear light, and output encoding follows
+the actual attachment format. This interim straight-alpha filtering path does
+not yet claim halo-free strong minification. Deliberate ICC/SDR conversion,
+high-depth presentation, mipmaps, and oversized-image tiling are **not implemented
 yet**. Other formats (including explicitly deferred XCF) give an unsupported-format
-error. Animation, zoom/pan/user transforms, clipboard/reveal, additional sorts,
-folder refresh, native menus/document-open integration, packaging and Linux
-desktop validation are later increments. No qView code or assets are included.
+error. Animation, rotation/mirror/flip, clipboard/reveal, native menus/document-open
+integration, packaging and Linux desktop validation are later increments.
+Interactive zoom/pan feel and real input-device classification still need human
+verification on target desktops. No qView code or assets are included.
 
 ## Development and quality gates
 

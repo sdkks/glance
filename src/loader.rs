@@ -8,7 +8,7 @@ use eframe::egui;
 
 use crate::{
     decode::{self, LoadError, Pixels},
-    folder::Folder,
+    folder::{Direction, Folder, Sort},
 };
 
 pub struct Request {
@@ -16,6 +16,9 @@ pub struct Request {
     pub path: PathBuf,
     pub scan_folder: bool,
     pub texture_limit: u32,
+    pub sort: Sort,
+    pub refresh: Option<(Folder, Option<Direction>)>,
+    pub load_unchanged: bool,
 }
 
 #[derive(Default)]
@@ -112,8 +115,28 @@ fn run(shared: Arc<Shared>) {
                 .take()
                 .expect("pending request checked above")
         };
-        let path = if request.scan_folder {
-            match Folder::open(request.path.clone()) {
+        let path = if let Some((mut folder, direction)) = request.refresh {
+            match folder.refresh(direction, request.sort) {
+                Ok(changed) => {
+                    let path = (changed || request.load_unchanged)
+                        .then(|| folder.selected_path().cloned())
+                        .flatten();
+                    if !publish(&shared, request.generation, |result| {
+                        result.folder = Some(Ok(folder))
+                    }) {
+                        continue;
+                    }
+                    path
+                }
+                Err(error) => {
+                    publish(&shared, request.generation, |result| {
+                        result.folder = Some(Err(error.into()))
+                    });
+                    continue;
+                }
+            }
+        } else if request.scan_folder {
+            match Folder::open_sorted(request.path.clone(), request.sort) {
                 Ok(folder) => {
                     let path = folder.selected_path().cloned();
                     if !publish(&shared, request.generation, |result| {
@@ -189,6 +212,9 @@ mod tests {
                 path: PathBuf::from(format!("{generation}.png")),
                 scan_folder: false,
                 texture_limit: 8192,
+                sort: Sort::default(),
+                refresh: None,
+                load_unchanged: true,
             });
         }
         let mailbox = loader.shared.mailbox.lock().unwrap();

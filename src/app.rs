@@ -1,19 +1,29 @@
-use std::path::PathBuf;
+use std::{path::PathBuf, sync::Arc};
 
-use eframe::egui::{self, Color32, Key, Modifiers, Rect, Sense, TextureHandle, TextureOptions};
+use eframe::egui::{self, Color32, Key, Modifiers, Sense};
 
 use crate::{
-    decode::LoadError,
-    folder::{Direction, Folder},
+    folder::{Direction, Folder, Sort},
     loader::{Completion, Loader, Request},
-    view,
+    render::Image,
+    view::View,
 };
 
 enum Display {
     Empty,
     Loading,
-    Ready(TextureHandle),
+    Ready(Arc<Image>),
     Error(String),
+}
+
+#[derive(Clone, Copy)]
+enum Command {
+    Open,
+    Navigate(Direction),
+    Sort(Sort),
+    Fit,
+    ActualSize,
+    Zoom(f32),
 }
 
 pub struct Viewer {
@@ -24,6 +34,9 @@ pub struct Viewer {
     texture_limit: u32,
     display: Display,
     last_title: String,
+    sort: Sort,
+    view: View,
+    render_state: Option<eframe::egui_wgpu::RenderState>,
 }
 
 impl Viewer {
@@ -49,6 +62,9 @@ impl Viewer {
                 }),
             display,
             last_title: String::new(),
+            sort: Sort::default(),
+            view: View::default(),
+            render_state: cc.wgpu_render_state.clone(),
         };
         if let Some(path) = initial {
             viewer.open(path);
@@ -59,49 +75,66 @@ impl Viewer {
     fn open(&mut self, path: PathBuf) {
         self.folder = None;
         self.selected = Some(path.clone());
-        self.request(path, true);
+        self.display = Display::Loading;
+        self.view.fit();
+        self.request(path, None);
     }
 
-    fn request(&mut self, path: PathBuf, scan_folder: bool) {
+    fn request(&mut self, path: PathBuf, refresh: Option<(Folder, Option<Direction>)>) {
         let Some(generation) = self.generation.checked_add(1) else {
             self.display = Display::Error("Selection counter exhausted; restart glance.".into());
             return;
         };
         self.generation = generation;
-        self.display = Display::Loading; // Drop the old texture: it must never masquerade as the new image.
         if let Some(loader) = &self.loader {
             loader.request(Request {
                 generation,
                 path,
-                scan_folder,
+                scan_folder: refresh.is_none(),
                 texture_limit: self.texture_limit,
+                sort: self.sort,
+                refresh,
+                load_unchanged: matches!(self.display, Display::Loading),
             });
         } else {
             self.display = Display::Error("Image loader unavailable; restart glance.".into());
         }
     }
 
-    fn navigate(&mut self, direction: Direction) {
-        if let Some(folder) = &mut self.folder
-            && folder.navigate(direction)
-            && let Some(path) = folder.selected_path().cloned()
-        {
-            self.selected = Some(path.clone());
-            self.request(path, false);
+    fn refresh(&mut self, direction: Option<Direction>) {
+        if let Some(folder) = &mut self.folder {
+            let snapshot = folder.clone();
+            let path = self.selected.clone().unwrap_or_default();
+            // Advance the provisional selection immediately so rapid keys build on
+            // one another. The worker rescans the pre-command tombstone anchor.
+            if let Some(direction) = direction
+                && folder.navigate(direction)
+            {
+                self.selected = folder.selected_path().cloned();
+                self.view.fit();
+                self.display = Display::Loading;
+            }
+            self.request(path, Some((snapshot, direction)));
         }
     }
 
-    fn admit(&mut self, result: Completion, ctx: &egui::Context) {
+    fn admit(&mut self, result: Completion) {
         if result.generation != self.generation {
             return;
         }
         if let Some(folder) = result.folder {
             match folder {
                 Ok(folder) => {
-                    self.selected = folder.selected_path().cloned();
-                    if self.selected.is_none() {
-                        self.display = Display::Empty;
+                    let selected = folder.selected_path().cloned();
+                    if selected != self.selected {
+                        self.view.fit();
+                        self.display = if selected.is_some() {
+                            Display::Loading
+                        } else {
+                            Display::Empty
+                        };
                     }
+                    self.selected = selected;
                     self.folder = Some(folder);
                 }
                 Err(error) => self.display = Display::Error(error.to_string()),
@@ -110,27 +143,27 @@ impl Viewer {
         if let Some(image) = result.image {
             self.display = match image {
                 Ok(pixels) => {
-                    let max_side = ctx.input(|input| input.max_texture_side);
-                    if pixels.size.iter().any(|&side| side > max_side) {
-                        Display::Error(
-                            LoadError::ResourceLimit(format!("display maximum side {max_side}"))
-                                .to_string(),
-                        )
-                    } else {
-                        let image =
-                            egui::ColorImage::from_rgba_unmultiplied(pixels.size, &pixels.rgba);
-                        let texture =
-                            ctx.load_texture("current image", image, TextureOptions::LINEAR);
-                        eprintln!(
-                            "Displayed {} ({} × {})",
-                            self.selected
-                                .as_deref()
-                                .unwrap_or(std::path::Path::new(""))
-                                .display(),
-                            pixels.size[0],
-                            pixels.size[1]
-                        );
-                        Display::Ready(texture)
+                    let size = pixels.size;
+                    match self
+                        .render_state
+                        .as_ref()
+                        .ok_or_else(|| "GPU renderer unavailable".to_owned())
+                        .and_then(|state| {
+                            Image::upload(state, pixels).map_err(|error| error.to_string())
+                        }) {
+                        Ok(image) => {
+                            eprintln!(
+                                "Displayed {} ({} × {})",
+                                self.selected
+                                    .as_deref()
+                                    .unwrap_or(std::path::Path::new(""))
+                                    .display(),
+                                size[0],
+                                size[1]
+                            );
+                            Display::Ready(image)
+                        }
+                        Err(error) => Display::Error(error),
                     }
                 }
                 Err(error) => Display::Error(error.to_string()),
@@ -182,12 +215,57 @@ impl Viewer {
             self.last_title = title;
         }
     }
+
+    fn menus(&self, ui: &mut egui::Ui, command: &mut Option<Command>) {
+        ui.menu_button("File", |ui| {
+            menu_command(ui, "Open…  ⌘/Ctrl+O", Command::Open, command);
+        });
+        ui.menu_button("Navigate", |ui| {
+            ui.add_enabled_ui(self.folder.is_some(), |ui| {
+                for (label, direction) in [
+                    ("Previous  ←", Direction::Previous),
+                    ("Next  →", Direction::Next),
+                    ("First  Home", Direction::First),
+                    ("Last  End", Direction::Last),
+                ] {
+                    menu_command(ui, label, Command::Navigate(direction), command);
+                }
+                ui.menu_button("Sort", |ui| {
+                    for (sort, label) in Sort::ALL {
+                        if ui.selectable_label(self.sort == sort, label).clicked() {
+                            *command = Some(Command::Sort(sort));
+                            ui.close();
+                        }
+                    }
+                });
+            });
+        });
+        ui.menu_button("View", |ui| {
+            ui.add_enabled_ui(matches!(self.display, Display::Ready(_)), |ui| {
+                for (label, action) in [
+                    ("Fit  0 / 1", Command::Fit),
+                    ("Actual Size (100%)  2", Command::ActualSize),
+                    ("Zoom In  +", Command::Zoom(1.25)),
+                    ("Zoom Out  −", Command::Zoom(0.8)),
+                ] {
+                    menu_command(ui, label, action, command);
+                }
+            });
+        });
+    }
+}
+
+fn menu_command(ui: &mut egui::Ui, label: &str, action: Command, command: &mut Option<Command>) {
+    if ui.button(label).clicked() {
+        *command = Some(action);
+        ui.close();
+    }
 }
 
 impl eframe::App for Viewer {
     fn logic(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         if let Some(loader) = &self.loader {
-            self.admit(loader.take_completion(), ctx);
+            self.admit(loader.take_completion());
         }
         self.update_title(ctx);
     }
@@ -201,114 +279,179 @@ impl eframe::App for Viewer {
         let shortcuts_enabled = !ctx.egui_wants_keyboard_input()
             && !egui::Popup::is_any_open(&ctx)
             && ctx.input(|input| input.focused);
-        let mut open = shortcuts_enabled
-            && ctx.input_mut(|input| input.consume_key(Modifiers::COMMAND, Key::O));
+        let mut command = None;
         if shortcuts_enabled {
-            for (key, direction) in [
-                (Key::ArrowLeft, Direction::Previous),
-                (Key::ArrowRight, Direction::Next),
-                (Key::Home, Direction::First),
-                (Key::End, Direction::Last),
+            if ctx.input_mut(|input| input.consume_key(Modifiers::COMMAND, Key::O)) {
+                command = Some(Command::Open);
+            }
+            for (key, action) in [
+                (Key::ArrowLeft, Command::Navigate(Direction::Previous)),
+                (Key::ArrowRight, Command::Navigate(Direction::Next)),
+                (Key::Home, Command::Navigate(Direction::First)),
+                (Key::End, Command::Navigate(Direction::Last)),
+                (Key::Num0, Command::Fit),
+                (Key::Num1, Command::Fit),
+                (Key::Num2, Command::ActualSize),
+                (Key::Plus, Command::Zoom(1.25)),
+                (Key::Equals, Command::Zoom(1.25)),
+                (Key::Minus, Command::Zoom(0.8)),
             ] {
                 if ctx.input_mut(|input| input.consume_key(Modifiers::NONE, key)) {
-                    self.navigate(direction);
+                    command = Some(action);
                 }
             }
+            if ctx.input_mut(|input| {
+                input.consume_key(Modifiers::SHIFT, Key::Plus)
+                    || input.consume_key(Modifiers::SHIFT, Key::Equals)
+            }) {
+                command = Some(Command::Zoom(1.25));
+            }
         }
+        egui::Panel::top("menus").show(ui, |ui| {
+            egui::MenuBar::new().ui(ui, |ui| self.menus(ui, &mut command));
+        });
         egui::CentralPanel::default()
             .frame(egui::Frame::central_panel(ui.style()).fill(Color32::from_gray(18)))
             .show(ui, |ui| {
                 let canvas = ui.available_rect_before_wrap();
-                let response = ui.allocate_rect(canvas, Sense::click());
+                let response = ui.allocate_rect(canvas, Sense::click_and_drag());
                 response.context_menu(|ui| {
-                    open |= ui.button("Open…  ⌘/Ctrl+O").clicked();
-                    if open {
-                        ui.close();
-                    }
+                    self.menus(ui, &mut command);
                 });
-                match &self.display {
-                    Display::Ready(texture) => {
-                        let rect =
-                            view::fitted_rect(canvas, texture.size(), ctx.pixels_per_point());
-                        let uv = Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0));
-                        ui.painter().image(texture.id(), rect, uv, Color32::WHITE);
+                if let Display::Ready(image) = &self.display {
+                    let size = image.size;
+                    let ppp = ctx.pixels_per_point();
+                    if let Some(action) = command {
+                        match action {
+                            Command::Fit => self.view.fit(),
+                            Command::ActualSize => self.view.actual_size(),
+                            Command::Zoom(factor) => {
+                                self.view.zoom(factor, canvas.center(), canvas, size, ppp)
+                            }
+                            _ => {}
+                        }
                     }
-                    display => {
-                        let path = self.selected.as_deref().unwrap_or(std::path::Path::new(""));
-                        let message = match display {
-                            Display::Empty if self.folder.is_some() => {
-                                "No JPEG or PNG images in this folder.".to_owned()
-                            }
-                            Display::Empty => {
-                                "Open an image, or drop a file or folder here.".to_owned()
-                            }
-                            Display::Loading => format!("Loading {}…", path.display()),
-                            Display::Error(error) => format!("{}\n\n{error}", path.display()),
-                            Display::Ready(_) => unreachable!(),
-                        };
-                        let layout = egui::Layout::centered_and_justified(egui::Direction::TopDown);
-                        let builder = egui::UiBuilder::new().max_rect(canvas).layout(layout);
-                        ui.scope_builder(builder, |ui| {
-                            ui.vertical_centered(|ui| {
-                                ui.label(message);
-                                open |= ui.button("Open…").clicked();
-                                if self.folder.is_some() {
-                                    ui.label(
-                                        "Left / Right: previous / next • Home / End: first / last",
-                                    );
+                    if shortcuts_enabled && !egui::Popup::is_any_open(&ctx) {
+                        if response.dragged() {
+                            self.view.pan(response.drag_delta(), canvas, size, ppp);
+                        }
+                        if response.hovered()
+                            && let Some(pointer) = ctx.input(|i| i.pointer.hover_pos())
+                        {
+                            ctx.input(|input| {
+                                for event in &input.events {
+                                    if let egui::Event::MouseWheel {
+                                        unit,
+                                        delta,
+                                        modifiers,
+                                        ..
+                                    } = event
+                                    {
+                                        if *unit == egui::MouseWheelUnit::Point
+                                            && !modifiers.command
+                                            && !modifiers.ctrl
+                                        {
+                                            self.view.pan(*delta, canvas, size, ppp);
+                                        } else {
+                                            self.view.zoom(
+                                                (delta.y
+                                                    * if *unit == egui::MouseWheelUnit::Line {
+                                                        0.15
+                                                    } else {
+                                                        0.01
+                                                    })
+                                                .exp(),
+                                                pointer,
+                                                canvas,
+                                                size,
+                                                ppp,
+                                            );
+                                        }
+                                    }
                                 }
                             });
-                        });
+                        }
                     }
+                    if canvas.is_positive()
+                        && let Some(state) = &self.render_state
+                    {
+                        ui.painter().add(image.callback(
+                            &state.device,
+                            canvas,
+                            self.view.rect(canvas, size, ppp),
+                        ));
+                    }
+                } else {
+                    let path = self.selected.as_deref().unwrap_or(std::path::Path::new(""));
+                    let message = match &self.display {
+                        Display::Empty if self.folder.is_some() => {
+                            "No JPEG or PNG images in this folder.".to_owned()
+                        }
+                        Display::Empty => {
+                            "Open an image, or drop a file or folder here.".to_owned()
+                        }
+                        Display::Loading => format!("Loading {}…", path.display()),
+                        Display::Error(error) => format!("{}\n\n{error}", path.display()),
+                        Display::Ready(_) => unreachable!(),
+                    };
+                    let builder = egui::UiBuilder::new().max_rect(canvas).layout(
+                        egui::Layout::centered_and_justified(egui::Direction::TopDown),
+                    );
+                    ui.scope_builder(builder, |ui| {
+                        ui.vertical_centered(|ui| {
+                            ui.label(message);
+                            if ui.button("Open…").clicked() {
+                                command = Some(Command::Open);
+                            }
+                        });
+                    });
                 }
             });
-        if open {
-            self.dialog(frame);
+        match command {
+            Some(Command::Open) => self.dialog(frame),
+            Some(Command::Navigate(direction)) => self.refresh(Some(direction)),
+            Some(Command::Sort(sort)) => {
+                self.sort = sort;
+                self.refresh(None);
+            }
+            _ => {}
         }
         self.update_title(&ctx);
-        // Worker completions and input events wake eframe. A settled image needs no timer.
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-
+    use crate::{decode::LoadError, folder::tests::TempDir};
     #[test]
-    fn ui_rejects_stale_results_and_keeps_navigation_after_error() {
-        let ctx = egui::Context::default();
+    fn stale_results_are_rejected_and_error_keeps_folder() {
+        let dir = TempDir::new();
+        let path = dir.0.join("latest.png");
         let mut viewer = Viewer {
             loader: None,
             folder: None,
-            selected: Some(PathBuf::from("latest.png")),
+            selected: Some(path.clone()),
             generation: 3,
             texture_limit: 8192,
             display: Display::Loading,
             last_title: String::new(),
+            sort: Sort::default(),
+            view: View::default(),
+            render_state: None,
         };
-        viewer.admit(
-            Completion {
-                generation: 2,
-                image: Some(Err(LoadError::Unsupported)),
-                ..Default::default()
-            },
-            &ctx,
-        );
+        viewer.admit(Completion {
+            generation: 2,
+            image: Some(Err(LoadError::Unsupported)),
+            ..Default::default()
+        });
         assert!(matches!(viewer.display, Display::Loading));
-        viewer.admit(
-            Completion {
-                generation: 3,
-                folder: Some(Ok(Folder {
-                    files: vec!["latest.png".into(), "next.png".into()],
-                    selected: Some(0),
-                })),
-                image: Some(Err(LoadError::Unsupported)),
-            },
-            &ctx,
-        );
+        viewer.admit(Completion {
+            generation: 3,
+            folder: Some(Ok(Folder::open(path.clone()).unwrap())),
+            image: Some(Err(LoadError::Unsupported)),
+        });
         assert!(matches!(viewer.display, Display::Error(_)));
-        viewer.navigate(Direction::Next);
-        assert_eq!(viewer.selected, Some(PathBuf::from("next.png")));
-        assert_eq!(viewer.generation, 4);
+        assert_eq!(viewer.folder.as_ref().unwrap().selected_path(), Some(&path));
     }
 }

@@ -2,6 +2,7 @@ mod app;
 mod decode;
 mod folder;
 mod loader;
+mod render;
 mod view;
 
 use eframe::egui;
