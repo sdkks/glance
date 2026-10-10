@@ -282,7 +282,7 @@ fn eligibility_is_exact_case_insensitive_dispatch_and_hidden_rules_unchanged() {
     for ext in [
         "jpg", "jpeg", "png", "tif", "tiff", "bmp", "ico", "cur", "icns", "tga", "pnm", "pbm",
         "pgm", "ppm", "pam", "wbmp", "xbm", "xpm", "pcx", "sgi", "bw", "rgb", "rgba", "gif",
-        "webp", "jxl", "svg", "svgz", "avif",
+        "webp", "jxl", "svg", "svgz", "avif", "psd", "kra", "ora",
     ] {
         assert!(crate::folder::eligible(Path::new(&format!(
             "file.{}",
@@ -294,7 +294,7 @@ fn eligibility_is_exact_case_insensitive_dispatch_and_hidden_rules_unchanged() {
         "file.avifs",
         "file.xcf",
         "file.dds",
-        "file.ora",
+        "file.psb",
         "file.otb",
         "file.bm",
         "file.iris",

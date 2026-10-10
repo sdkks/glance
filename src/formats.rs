@@ -19,6 +19,9 @@ pub enum Format {
     Svg,
     Svgz,
     Avif,
+    Psd,
+    Kra,
+    Ora,
 }
 
 pub fn format(path: &Path) -> Option<Format> {
@@ -39,6 +42,9 @@ pub fn format(path: &Path) -> Option<Format> {
         b"xbm" => Format::Xbm,
         b"xpm" => Format::Xpm,
         b"pcx" => Format::Pcx,
+        b"psd" => Format::Psd,
+        b"kra" => Format::Kra,
+        b"ora" => Format::Ora,
         b"avif" => Format::Avif,
         b"svg" => Format::Svg,
         b"svgz" => Format::Svgz,
@@ -69,6 +75,11 @@ pub fn decoder(
         Format::Xbm => Box::new(image_extras::xbm::XbmDecoder::new(cursor)?),
         Format::Xpm => Box::new(image_extras::xpm::XpmDecoder::new(cursor)?),
         Format::Pcx => Box::new(image_extras::pcx::PCXDecoder::new(cursor)?),
+        Format::Psd | Format::Kra | Format::Ora => {
+            return Err(LoadError::UnsupportedVariant(
+                "Document: use merged preview decoder".into(),
+            ));
+        }
         Format::Avif => {
             return Err(LoadError::UnsupportedVariant(
                 "AVIF: use native decoder".into(),

@@ -333,6 +333,30 @@ The default panic hook may still print a diagnostic. This boundary does not catc
 allocator aborts, process aborts or memory-safety failures. Encoded reads and output
 sizes remain bounded; upstream scratch-allocation limits remain best-effort.
 
+## Document previews
+
+PSD (`psd`) displays the stored merged composite, never a reconstruction from
+layers. Ordinary 8-bit RGB and grayscale, including alpha, support raw, PackBits
+RLE and ZIP without prediction. The pinned `psd` 0.3.5 merged-composite API is fed
+validated raw planes: our bounded adapter expands RLE/ZIP and skips unused layer
+records, rather than using the crate's unsupported ZIP or eager layer parser.
+Embedded ICC resource 1039 uses the existing color normalization/fallback path.
+CMYK, Lab, 16/32-bit samples, ZIP-prediction and PSB content return specific named
+unsupported errors. Other color modes and extra spot channels are unsupported;
+this is not full Photoshop fidelity or layer inspection. `.psb` is not eligible.
+
+Krita (`kra`) and OpenRaster (`ora`) display only the root `mergedimage.png`
+stored PNG composite. `preview.png` is a thumbnail, not an accepted fallback.
+KRA is a flattened preview, not full Krita fidelity; neither format renders layers.
+PNG ICC, orientation and U8/U16 normalization follow the ordinary PNG path.
+Archives are never extracted to disk. Stored/deflated classic ZIP is supported;
+ZIP64 is unsupported. At most 4096 entries, a 64 MiB expanded merged PNG and the
+ordinary decoded-image limits apply. Absolute, parent-traversal, backslash and
+drive-qualified entry names are rejected, including unused entries. Missing or
+duplicate merged images and malformed archives show named format errors.
+Tests construct original analytic PNG/ZIP and hand-built PSD fixtures; real
+Photoshop/Krita documents and Linux desktop display still need human checks.
+
 ## Web and vector formats
 
 JPEG XL (`jxl`) stills use pinned `jxl-oxide` 0.12.6's core API (not its image
