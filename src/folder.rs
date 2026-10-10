@@ -1,4 +1,35 @@
-use std::{cmp::Ordering, ffi::OsStr, fs, io, path::PathBuf, time::SystemTime};
+use std::{
+    cmp::Ordering, collections::HashMap, ffi::OsStr, fs, io, path::PathBuf, time::SystemTime,
+};
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct FileVersion {
+    pub path: PathBuf,
+    size: u64,
+    modified: SystemTime,
+    #[cfg(unix)]
+    identity: (u64, u64, i64, i64),
+}
+
+impl FileVersion {
+    pub fn read(path: &std::path::Path) -> io::Result<Self> {
+        let metadata = fs::metadata(path)?;
+        #[cfg(unix)]
+        use std::os::unix::fs::MetadataExt;
+        Ok(Self {
+            path: path.to_path_buf(),
+            size: metadata.len(),
+            modified: metadata.modified()?,
+            #[cfg(unix)]
+            identity: (
+                metadata.dev(),
+                metadata.ino(),
+                metadata.ctime(),
+                metadata.ctime_nsec(),
+            ),
+        })
+    }
+}
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum Sort {
@@ -32,6 +63,7 @@ struct FileMetadata {
 pub struct Folder {
     pub files: Vec<PathBuf>,
     pub selected: Option<usize>,
+    versions: HashMap<PathBuf, FileVersion>,
     parent: PathBuf,
     explicit: Option<PathBuf>,
     pub sort: Sort,
@@ -63,11 +95,13 @@ impl Folder {
         let mut folder = Self {
             files: Vec::new(),
             selected: None,
+            versions: HashMap::new(),
             parent,
             explicit,
             sort,
         };
         folder.files = folder.snapshot(true)?;
+        folder.update_versions();
         folder.selected = if directory {
             (!folder.files.is_empty()).then_some(0)
         } else {
@@ -95,6 +129,22 @@ impl Folder {
         }
         entries.sort_by(|(a, am), (b, bm)| compare_files(a, am, b, bm, self.sort));
         Ok(entries.into_iter().map(|(path, _)| path).collect())
+    }
+
+    fn update_versions(&mut self) {
+        self.versions = self
+            .files
+            .iter()
+            .filter_map(|path| FileVersion::read(path).ok().map(|v| (path.clone(), v)))
+            .collect();
+    }
+
+    pub fn version(&self, path: &PathBuf) -> Option<&FileVersion> {
+        self.versions.get(path)
+    }
+
+    pub fn parent(&self) -> &std::path::Path {
+        &self.parent
     }
 
     pub fn selected_path(&self) -> Option<&PathBuf> {
@@ -150,6 +200,7 @@ impl Folder {
                 .or_else(|| (!files.is_empty()).then_some(0)),
         };
         self.files = files;
+        self.update_versions();
         self.selected = selected;
         Ok(self.selected_path() != old_path.as_ref())
     }

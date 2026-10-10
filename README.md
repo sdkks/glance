@@ -57,9 +57,47 @@ A failed load keeps the prior image visible and navigation available. Menus are 
 with Tab/Shift+Tab to focus and Enter/Space to activate; viewer shortcuts are
 suppressed while menus or another control own focus.
 
-The title reports filename and position/count. A single background worker holds
+The title reports filename and position/count. A foreground worker holds
 one replaceable pending selection; only the current generation may be displayed.
-Settled images have no application repaint timer.
+A separate bounded worker decodes neighbors, so even an uncancellable neighbor
+codec cannot queue-block a foreground request. Settled images have no application
+repaint timer.
+
+## Preloading and resident history
+
+**Settings → Preload depth** offers Off / 1 / 2 / 3 / 4 / 5, with an active radio
+indicator. Default is 1; this is session-only and writes no configuration. Once a
+selection settles, up to N images ahead and behind are decoded into the same
+oriented RGBA8 pixels used by foreground loads. Prefetch stays CPU-only until
+admission: a hit skips decoding but still uploads its texture through the ordinary
+atomic swap. Up to N recently admitted images retain their CPU pixels and GPU
+resident, so history hits skip both decode and upload. View transforms still reset
+on a different-file admission; history does not preserve per-file view state.
+Off stops prefetch and releases cached residents immediately.
+
+At most 2N cached entries plus the displayed image are retained (history and
+neighbors share those slots). Their combined logical RGBA8 byte budget is
+**max(512 MiB, twice the largest image admitted in this folder)**. Oldest history
+is evicted first, then oldest prefetch; the displayed image is never an eviction
+candidate. History recency changes on admission, not background decoding. This
+accounts each shared pixel payload once. History/display textures require up to
+another RGBA8-sized allocation each, so their CPU+GPU payload bound is at most
+twice the logical budget (at most 2 GiB with the existing per-image limit).
+
+One in-flight decode/result per worker, encoded input, decoder/conversion scratch,
+GPU staging and clipboard copies are **additional bounded/transient allocations**,
+not included in the resident cache budget and not a process-RSS guarantee. A
+running synchronous prefetch codec may finish after cancellation; its stale
+result is discarded, never admitted. No neighboring animation runs; this version
+still only dispatches JPEG and static PNG.
+
+Before navigation/sort, the foreground worker rescans and checks path, size,
+modification time and Unix device/inode/change time. Removed or changed entries
+are released; valid path-keyed entries survive sorting, while neighbors are
+replanned in the new order. A file changing during decode produces a retryable
+error. Metadata identity is not an atomic filesystem snapshot. Decreasing depth
+trims immediately and replans; opening another folder clears neighbors/history.
+Interactive latency and menu/input feel still need human desktop verification.
 
 ## Clipboard and desktop actions
 
@@ -106,8 +144,8 @@ oriented CPU RGBA8 pixels for Copy Image in addition to the GPU texture. Transit
 may retain two CPU/GPU residents alongside decoding/upload staging, not a total
 512 MiB budget. Copy Image allocates another full RGBA8 bitmap, checked against the
 same 512 MiB per-buffer limit with a fallible allocation; native clipboard encoding
-may allocate further buffers. Failure is named, never a reduced-size copy. One worker and bounded pending/result
-slots prevent growth per keypress. These interim calibration values were raised
+may allocate further buffers. Failure is named, never a reduced-size copy. Two workers with bounded pending/result
+slots prevent growth per keypress; the resident cache envelope is described above. These interim calibration values were raised
 after real 38MP content was rejected; the full-detail presentation envelope
 (including tiling and high-depth support) remains future work.
 

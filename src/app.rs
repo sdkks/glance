@@ -3,7 +3,8 @@ use std::{path::PathBuf, sync::Arc};
 use eframe::egui::{self, Color32, Key, Modifiers, Sense};
 
 use crate::{
-    folder::{Direction, Folder, Sort},
+    cache::{Cache, Entry, Ready, neighbors},
+    folder::{Direction, FileVersion, Folder, Sort},
     loader::{Completion, Loader, Request},
     render::Image,
     transform::Operation,
@@ -80,6 +81,7 @@ impl<T> Display<T> {
 
 #[derive(Clone, Copy)]
 enum Command {
+    Depth(usize),
     Open,
     Navigate(Direction),
     Sort(Sort),
@@ -95,6 +97,12 @@ enum Command {
 }
 
 pub struct Viewer {
+    prefetch: Option<Loader>,
+    cache: Cache<Ready>,
+    displayed_version: Option<FileVersion>,
+    displayed_generation: u64,
+    prefetch_epoch: u64,
+    prefetch_queue: std::collections::VecDeque<PathBuf>,
     loader: Option<Loader>,
     folder: Option<Folder>,
     selected: Option<PathBuf>,
@@ -121,7 +129,22 @@ impl Viewer {
                 ))),
             ),
         };
+        let (prefetch, prefetch_error) = match Loader::new(cc.egui_ctx.clone()) {
+            Ok(loader) => (Some(loader), None),
+            Err(error) => (
+                None,
+                Some(format!(
+                    "Preloading unavailable; could not start worker: {error}"
+                )),
+            ),
+        };
         let mut viewer = Self {
+            prefetch,
+            cache: Cache::default(),
+            displayed_version: None,
+            displayed_generation: 0,
+            prefetch_epoch: 0,
+            prefetch_queue: Default::default(),
             loader,
             folder: None,
             selected: None,
@@ -137,7 +160,7 @@ impl Viewer {
             view: View::default(),
             render_state: cc.wgpu_render_state.clone(),
             clipboard: None,
-            action_error: None,
+            action_error: prefetch_error,
             reveal_child: None,
         };
         if let Some(path) = initial {
@@ -147,6 +170,13 @@ impl Viewer {
     }
 
     fn open(&mut self, path: PathBuf) {
+        if self
+            .folder
+            .as_ref()
+            .is_none_or(|folder| path.parent() != Some(folder.parent()))
+        {
+            self.cache.clear();
+        }
         self.folder = None;
         self.selected = Some(path.clone());
         self.display.loading();
@@ -154,6 +184,7 @@ impl Viewer {
     }
 
     fn request(&mut self, path: PathBuf, refresh: Option<(Folder, Option<Direction>)>) {
+        self.stop_prefetch();
         let Some(generation) = self.display.generation.checked_add(1) else {
             self.display
                 .fail("Selection counter exhausted; restart glance.".into());
@@ -162,6 +193,7 @@ impl Viewer {
         self.display.generation = generation;
         if let Some(loader) = &self.loader {
             loader.request(Request {
+                cached: self.cache.snapshot(),
                 generation,
                 path,
                 scan_folder: refresh.is_none(),
@@ -207,46 +239,173 @@ impl Viewer {
                             self.display.clear();
                         }
                     }
+                    if self
+                        .folder
+                        .as_ref()
+                        .is_some_and(|old| old.parent() != folder.parent())
+                    {
+                        self.cache.clear();
+                    }
+                    self.cache.reconcile(&folder, self.displayed_bytes());
                     self.selected = selected;
                     self.folder = Some(folder);
                 }
                 Err(error) => self.display.fail(error.to_string()),
             }
         }
-        if let Some(image) = result.image {
-            let ready = image.map_err(|error| error.to_string()).and_then(|pixels| {
-                self.render_state
+        let ready = if let Some(resident) = result.resident {
+            Some(match resident.as_ref() {
+                Ready::Resident(image) => Ok(Arc::clone(image)),
+                Ready::Pixels(pixels) => self.upload(Arc::clone(pixels)),
+            })
+        } else {
+            result.image.map(|image| {
+                image
+                    .map_err(|error| error.to_string())
+                    .and_then(|pixels| self.upload(Arc::new(pixels)))
+            })
+        };
+        if let Some(ready) = ready {
+            self.commit_ready(result.generation, result.version, ready);
+        } else if matches!(self.display.status, Status::Ready) {
+            self.start_prefetch();
+        }
+    }
+
+    fn upload(&self, pixels: Arc<crate::decode::Pixels>) -> Result<Arc<Image>, String> {
+        self.render_state
+            .as_ref()
+            .ok_or_else(|| "GPU renderer unavailable".to_owned())
+            .and_then(|state| Image::upload(state, pixels).map_err(|error| error.to_string()))
+    }
+
+    fn commit_ready(
+        &mut self,
+        generation: u64,
+        version: Option<FileVersion>,
+        ready: Result<Arc<Image>, String>,
+    ) {
+        let old = self
+            .display
+            .image
+            .clone()
+            .zip(self.displayed_version.clone());
+        // Cached and freshly uploaded residents share the atomic admission seam.
+        if self
+            .display
+            .finish(generation, ready, self.selected.clone(), &mut self.view)
+        {
+            let bytes = self.displayed_bytes();
+            if let Some(version) = &version {
+                self.cache.admitted(version, bytes);
+            }
+            if let Some((image, old_version)) = old
+                && Some(&old_version) != version.as_ref()
+                && self
+                    .folder
                     .as_ref()
-                    .ok_or_else(|| "GPU renderer unavailable".to_owned())
-                    .and_then(|state| {
-                        Image::upload(state, pixels).map_err(|error| error.to_string())
-                    })
-            });
-            // Upload stages all texels; wgpu orders these writes before the draw
-            // in the next queue submission. No blank frame or GPU wait is needed.
-            if self.display.finish(
-                result.generation,
-                ready,
-                self.selected.clone(),
-                &mut self.view,
-            ) {
-                let size = self
-                    .display
-                    .image
-                    .as_ref()
-                    .expect("just committed image")
-                    .size;
-                eprintln!(
-                    "Displayed {} ({} × {})",
-                    self.selected
-                        .as_deref()
-                        .unwrap_or(std::path::Path::new(""))
-                        .display(),
-                    size[0],
-                    size[1]
+                    .and_then(|f| f.version(&old_version.path))
+                    == Some(&old_version)
+            {
+                self.cache.insert(
+                    Entry {
+                        version: old_version,
+                        generation: self.displayed_generation,
+                        bytes: image.pixels.rgba.len(),
+                        value: Arc::new(Ready::Resident(image)),
+                        history: true,
+                    },
+                    bytes,
                 );
             }
+            self.displayed_version = version;
+            self.displayed_generation = generation;
+            self.cache.trim(bytes);
+            self.start_prefetch();
+            let size = self
+                .display
+                .image
+                .as_ref()
+                .expect("just committed image")
+                .size;
+            eprintln!(
+                "Displayed {} ({} × {})",
+                self.selected
+                    .as_deref()
+                    .unwrap_or(std::path::Path::new(""))
+                    .display(),
+                size[0],
+                size[1]
+            );
         }
+    }
+
+    fn displayed_bytes(&self) -> usize {
+        self.display
+            .image
+            .as_ref()
+            .map_or(0, |image| image.pixels.rgba.len())
+    }
+
+    fn stop_prefetch(&mut self) {
+        self.prefetch_epoch = self.prefetch_epoch.saturating_add(1);
+        self.prefetch_queue.clear();
+        if let Some(loader) = &self.prefetch {
+            loader.cancel(self.prefetch_epoch);
+        }
+    }
+
+    fn start_prefetch(&mut self) {
+        self.stop_prefetch();
+        if let Some(folder) = &self.folder {
+            self.cache.reconcile(folder, self.displayed_bytes());
+            self.prefetch_queue = neighbors(folder, self.cache.depth)
+                .into_iter()
+                .filter(|path| !self.cache.contains(path))
+                .collect();
+        }
+        self.next_prefetch();
+    }
+
+    fn next_prefetch(&mut self) {
+        if let Some(path) = self.prefetch_queue.pop_front()
+            && let Some(loader) = &self.prefetch
+        {
+            loader.request(Request {
+                cached: Vec::new(),
+                generation: self.prefetch_epoch,
+                path,
+                scan_folder: false,
+                texture_limit: self.texture_limit,
+                sort: self.sort,
+                refresh: None,
+                load_unchanged: true,
+            });
+        }
+    }
+
+    fn admit_prefetch(&mut self, result: Completion) {
+        if result.generation != self.prefetch_epoch || result.image.is_none() {
+            return;
+        }
+        if let Some(version) = result.version
+            && self.folder.as_ref().and_then(|f| f.version(&version.path)) == Some(&version)
+            && self.selected.as_ref() != Some(&version.path)
+            && let Some(Ok(pixels)) = result.image
+        {
+            let bytes = pixels.rgba.len();
+            self.cache.insert(
+                Entry {
+                    version,
+                    generation: result.generation,
+                    value: Arc::new(Ready::Pixels(Arc::new(pixels))),
+                    bytes,
+                    history: false,
+                },
+                self.displayed_bytes(),
+            );
+        }
+        self.next_prefetch();
     }
 
     fn desktop_action(&mut self, action: Command) -> Result<(), String> {
@@ -398,6 +557,21 @@ impl Viewer {
                 }
             });
         });
+        ui.menu_button("Settings", |ui| {
+            ui.menu_button("Preload depth", |ui| {
+                for depth in 0..=5 {
+                    let label = if depth == 0 {
+                        "Off".into()
+                    } else {
+                        depth.to_string()
+                    };
+                    if ui.radio(self.cache.depth == depth, label).clicked() {
+                        *command = Some(Command::Depth(depth));
+                        ui.close();
+                    }
+                }
+            });
+        });
     }
 }
 
@@ -412,6 +586,9 @@ impl eframe::App for Viewer {
     fn logic(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         if let Some(loader) = &self.loader {
             self.admit(loader.take_completion());
+        }
+        if let Some(prefetch) = &self.prefetch {
+            self.admit_prefetch(prefetch.take_completion());
         }
         self.update_title(ctx);
         if let Some(child) = &mut self.reveal_child {
@@ -593,6 +770,15 @@ impl eframe::App for Viewer {
                 }
             });
         match command {
+            Some(Command::Depth(depth)) => {
+                self.cache.depth = depth;
+                self.cache.trim(self.displayed_bytes());
+                if matches!(self.display.status, Status::Ready) {
+                    self.start_prefetch();
+                } else {
+                    self.stop_prefetch();
+                }
+            }
             Some(Command::Open) => self.dialog(frame),
             Some(Command::Navigate(direction)) => self.refresh(Some(direction)),
             Some(Command::Sort(sort)) => {
@@ -616,6 +802,50 @@ impl eframe::App for Viewer {
 mod tests {
     use super::*;
     use crate::{decode::LoadError, folder::tests::TempDir};
+
+    #[test]
+    fn prefetched_and_history_hits_use_atomic_admission_without_decode() {
+        let dir = TempDir::new();
+        let path = dir.0.join("hit.png");
+        std::fs::write(&path, b"identity").unwrap();
+        for history in [false, true] {
+            let version = FileVersion::read(&path).unwrap();
+            let resident = Arc::new("display-ready pixels");
+            let mut cache = Cache::default();
+            cache.insert(
+                Entry {
+                    version: version.clone(),
+                    generation: 1,
+                    value: Arc::clone(&resident),
+                    bytes: 4,
+                    history,
+                },
+                4,
+            );
+            let hit = crate::loader::find_cached(cache.snapshot(), Some(&version)).unwrap();
+            let mut display = Display::new(Status::Loading);
+            display.generation = 9;
+            let mut view = View::default();
+            assert!(display.finish(9, Ok(hit), Some(path.clone()), &mut view));
+            assert!(Arc::ptr_eq(display.image.as_ref().unwrap(), &resident));
+            assert!(matches!(display.status, Status::Ready));
+            std::fs::write(
+                &path,
+                if history {
+                    b"changed again".as_slice()
+                } else {
+                    b"changed".as_slice()
+                },
+            )
+            .unwrap();
+            let changed = FileVersion::read(&path).unwrap();
+            assert!(crate::loader::find_cached(cache.snapshot(), Some(&changed)).is_none());
+            // Restore the identity for the next case by using a fresh metadata snapshot.
+            if !history {
+                std::fs::write(&path, b"identity").unwrap();
+            }
+        }
+    }
 
     #[test]
     fn swap_holds_prior_pixels_and_framing_until_ready() {
@@ -754,6 +984,12 @@ mod tests {
         let dir = TempDir::new();
         let path = dir.0.join("latest.png");
         let mut viewer = Viewer {
+            prefetch: None,
+            cache: Cache::default(),
+            displayed_version: None,
+            displayed_generation: 0,
+            prefetch_epoch: 0,
+            prefetch_queue: Default::default(),
             loader: None,
             folder: None,
             selected: Some(path.clone()),
@@ -780,6 +1016,7 @@ mod tests {
             generation: 3,
             folder: Some(Ok(Folder::open(path.clone()).unwrap())),
             image: Some(Err(LoadError::Unsupported)),
+            ..Default::default()
         });
         assert!(matches!(viewer.display.status, Status::Error(_)));
         assert_eq!(viewer.folder.as_ref().unwrap().selected_path(), Some(&path));
