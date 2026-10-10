@@ -1,0 +1,7 @@
+# Temporarily ignore agent prompt stuff until we complete the v1 of project.
+.pi
+AGENTS.md
+.gitignore
+
+# Cargo build output.
+/target/
