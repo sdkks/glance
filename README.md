@@ -66,7 +66,7 @@ repaint timer.
 ## Preloading and resident history
 
 **Settings → Preload depth** offers Off / 1 / 2 / 3 / 4 / 5, with an active radio
-indicator. Default is 1; this is session-only and writes no configuration. Once a
+indicator. Default is 1; the choice is saved across launches (see Settings below). Once a
 selection settles, up to N images ahead and behind are decoded into the same
 oriented straight U8/U16 source and rendering levels used by foreground loads. Prefetch stays
 CPU-only until admission: a hit skips decoding but stages visible tiles through
@@ -100,6 +100,31 @@ replanned in the new order. A file changing during decode produces a retryable
 error. Metadata identity is not an atomic filesystem snapshot. Decreasing depth
 trims immediately and replans; opening another folder clears neighbors/history.
 Interactive latency and menu/input feel still need human desktop verification.
+
+## Settings persistence
+
+Preload depth is loaded before the first folder admission from a human-readable
+TOML file:
+
+- macOS: `$HOME/Library/Application Support/glance/settings.toml`
+- Linux: `$XDG_CONFIG_HOME/glance/settings.toml` when that variable is absolute;
+  otherwise `$HOME/.config/glance/settings.toml`
+- Windows: persistence is deferred; settings remain session-only.
+
+The stable key `preload-depth = 1` accepts integers 0 (Off) through 5. Unknown
+keys are tolerated on load (not retained when saving); missing keys use defaults.
+Sort still remains session-only. Missing/malformed files or invalid depth values
+use depth 1 with a debug diagnostic, without a dialog. Missing or nonabsolute
+HOME disables persistence, including when XDG_CONFIG_HOME is present.
+
+Each depth change immediately updates preloading and synchronously writes a
+unique temporary file in the same directory, flushes it, then atomically renames
+it over the settings file. Force-quit after a completed change preserves the
+choice; readers see either the old or the complete new file, never partial output.
+Failed writes clean up the temporary file and disable persistence for the rest
+of that session, with only a debug diagnostic; viewing and menu changes continue.
+A crash before rename can leave a temporary file, ignored on subsequent launches.
+Atomic replacement is not a promise of power-loss durability of directory metadata.
 
 ## Clipboard and desktop actions
 
@@ -347,7 +372,9 @@ Glance is MIT; see `LICENSE`. Direct dependencies are pinned to eframe 0.36.2
 (Zlib OR Apache-2.0 OR MIT), and objc2-foundation 0.3.2 (MIT).
 The viewer directly enables image's JPEG/PNG/TIFF codecs. Color conversion uses
 moxcms 0.8.1 (BSD-3-Clause OR Apache-2.0); RGBA16F packing uses half 2.7.1
-(MIT OR Apache-2.0), promoted from the existing resolved graph. egui's bundled
+(MIT OR Apache-2.0), promoted from the existing resolved graph. Settings parsing
+uses toml_edit 0.25.17 (MIT OR Apache-2.0), also promoted without new resolved
+packages. egui's bundled
 default fonts have their own notices.
 See `THIRD_PARTY.md` for the resolved crate/license inventory and distribution
 limitations. No third-party library source has been modified.

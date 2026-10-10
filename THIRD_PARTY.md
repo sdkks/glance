@@ -9,7 +9,8 @@ source is included. Direct dependencies: eframe 0.36.2 (MIT OR Apache-2.0), imag
 0.25.10 (MIT OR Apache-2.0), rfd 0.17.2 (MIT), arboard 3.6.1 (MIT OR Apache-2.0),
 and macOS-only objc2 0.6.5 (MIT), objc2-app-kit 0.3.2 (Zlib OR Apache-2.0 OR MIT),
 objc2-foundation 0.3.2 (MIT), moxcms 0.8.1 (BSD-3-Clause OR Apache-2.0), and
-half 2.7.1 (MIT OR Apache-2.0). Color/half-float and clipboard adapters promote
+half 2.7.1 (MIT OR Apache-2.0), and toml_edit 0.25.17+spec-1.1.0 (MIT OR Apache-2.0).
+Settings parsing, color/half-float and clipboard adapters promote
 already-resolved packages to direct dependencies; the resolved package inventory
 is unchanged. TIFF is now directly enabled in image (already resolved transitively).
 
