@@ -42,7 +42,7 @@ case "${1:-install}" in
             configured=
             entry_count=0
         fi
-        [ "$entry_count" -eq 1 ] && [ "$configured" = .githooks ] || refuse "Refusing to clear local core.hooksPath: $entry_count entries (${configured:-unset/empty}); expected exactly one .githooks value."
+        [ "$entry_count" -eq 1 ] && [ "$configured" = .githooks ] || refuse "Refusing to clear local core.hooksPath: found $entry_count local entr$( [ "$entry_count" -eq 1 ] && printf y || printf ies ); expected exactly one .githooks value. Inspect with: git config --local --show-origin --get-all core.hooksPath"
         git config --local --unset-all core.hooksPath
         printf '%s\n' 'Local tracked-hook activation removed; inherited hooksPath settings, if any, still apply.'
         ;;
