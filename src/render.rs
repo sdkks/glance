@@ -257,7 +257,7 @@ impl Image {
                 ..Default::default()
             });
             Ok(Arc::new(Self {
-                size: pixels.size,
+                size: pixels.svg.as_ref().map_or(pixels.size, |svg| svg.size),
                 pixels,
                 pipeline,
                 layout,
@@ -398,6 +398,12 @@ impl Image {
         physical_scale: f32,
         frame: u64,
     ) -> Result<Option<Prepared>, LoadError> {
+        // View framing remains in intrinsic SVG units; levels are in raster pixels.
+        let physical_scale = if self.pixels.svg.is_some() {
+            physical_scale / self.pixels.svg_scale
+        } else {
+            physical_scale
+        };
         let (a, b, blend) = levels::select(&self.pixels.levels, physical_scale);
         let visible = source_visible(canvas, rect, transform);
         let first = tiles::coverage(self.pixels.levels[a].size, a, self.core, visible);

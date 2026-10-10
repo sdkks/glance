@@ -229,6 +229,8 @@ impl Playback {
 pub struct Viewer {
     context: egui::Context,
     animation: Option<Playback>,
+    svg_worker: Option<crate::decode::svg::worker::Worker>,
+    pending_svg: Option<(u64, Arc<Image>)>,
     pending_animation: bool,
     uploads: Arc<std::sync::Mutex<crate::render::Uploads>>,
     staging_frame: u64,
@@ -284,6 +286,8 @@ impl Viewer {
         let mut viewer = Self {
             context: cc.egui_ctx.clone(),
             animation: None,
+            svg_worker: None,
+            pending_svg: None,
             pending_animation: false,
             uploads: crate::render::Uploads::new(cc.wgpu_render_state.as_ref()),
             staging_frame: 0,
@@ -337,6 +341,10 @@ impl Viewer {
     }
 
     fn request(&mut self, path: PathBuf, refresh: Option<(Folder, Option<Direction>)>) {
+        self.pending_svg = None;
+        if let Some(worker) = &self.svg_worker {
+            worker.cancel();
+        }
         if matches!(self.display.status, Status::Loading) {
             self.pending_image = None;
             self.animation = None;
@@ -661,6 +669,97 @@ impl Viewer {
         }
     }
 
+    fn tick_svg(&mut self, canvas: egui::Rect, ppp: f32) {
+        if !canvas.is_positive()
+            || !matches!(self.display.status, Status::Ready)
+            || self.display.path != self.selected
+            || self.pending_image.is_some()
+        {
+            return;
+        }
+        let Some(image) = self.display.image.clone() else {
+            return;
+        };
+        let Some(document) = &image.pixels.svg else {
+            return;
+        };
+        if self.svg_worker.is_none() {
+            match crate::decode::svg::worker::Worker::new(self.context.clone()) {
+                Ok(worker) => self.svg_worker = Some(worker),
+                Err(error) => {
+                    self.action_error = Some(format!("SVG raster worker unavailable: {error}"));
+                    return;
+                }
+            }
+        }
+        let size = self.view.transform.size(image.size);
+        let needed = self.view.scale(canvas, size, ppp);
+        let worker = self.svg_worker.as_ref().expect("SVG worker initialized");
+        worker.update(&image.pixels, needed, self.view.exact_svg_scale());
+        if self
+            .pending_svg
+            .as_ref()
+            .is_some_and(|(revision, _)| !worker.current(*revision, document))
+        {
+            self.pending_svg = None;
+        }
+        if let Some((revision, result)) = worker.take() {
+            match result {
+                Ok(pixels) if worker.current(revision, document) => {
+                    match self.upload(Arc::new(pixels)) {
+                        Ok(image) => self.pending_svg = Some((revision, image)),
+                        Err(error) => self.action_error = Some(error),
+                    }
+                }
+                Err(error) => self.action_error = Some(error.to_string()),
+                _ => {}
+            }
+        }
+        let Some((revision, candidate)) = self.pending_svg.take() else {
+            return;
+        };
+        let prepared = self
+            .render_state
+            .as_ref()
+            .ok_or_else(|| "GPU renderer unavailable".to_owned())
+            .and_then(|state| {
+                candidate
+                    .callback(
+                        state,
+                        canvas,
+                        self.view.rect(canvas, size, ppp),
+                        self.view.transform,
+                        needed,
+                        self.staging_frame,
+                    )
+                    .map_err(|e| e.to_string())
+            });
+        match prepared {
+            Ok(Some(paint)) => {
+                // Same identity and framing, but still require complete GPU coverage.
+                if self.display.finish_tiles(
+                    self.display.generation,
+                    candidate,
+                    Some(paint.coverage),
+                    self.display.path.clone(),
+                    &mut self.view,
+                ) {
+                    self.last_paint = Some(paint.paint);
+                    let bytes = self.displayed_bytes();
+                    if let Some(version) = &self.displayed_version {
+                        self.cache.admitted(version, bytes);
+                    }
+                    self.cache.trim(bytes);
+                }
+            }
+            Ok(None) => {
+                self.pending_svg = Some((revision, candidate));
+                self.context.request_repaint();
+            }
+            Err(error) => self.action_error = Some(error),
+        }
+    }
+
     fn displayed_bytes(&self) -> usize {
         self.display
             .image
@@ -755,7 +854,12 @@ impl Viewer {
                     .image
                     .as_ref()
                     .ok_or("No displayed image to copy.")?;
-                crate::desktop::copy_image(clipboard, &image.pixels, self.view.transform)
+                if let Some(svg) = &image.pixels.svg {
+                    let intrinsic = svg.rasterize(1.0).map_err(|e| e.to_string())?;
+                    crate::desktop::copy_image(clipboard, &intrinsic, self.view.transform)
+                } else {
+                    crate::desktop::copy_image(clipboard, &image.pixels, self.view.transform)
+                }
             }
             Command::CopyFile => {
                 let path = self
@@ -1131,7 +1235,7 @@ impl eframe::App for Viewer {
                         }
                     }
                 }
-                if let Some(image) = &self.display.image {
+                if let Some(image) = self.display.image.clone() {
                     let mut size = self.view.transform.size(image.size);
                     let ppp = ctx.pixels_per_point();
                     if let Some(action) = command {
@@ -1194,6 +1298,8 @@ impl eframe::App for Viewer {
                             });
                         }
                     }
+                    self.tick_svg(canvas, ppp);
+                    let image = self.display.image.as_ref().expect("displayed image");
                     if canvas.is_positive()
                         && let Some(state) = &self.render_state
                     {
@@ -2067,6 +2173,8 @@ mod tests {
         let mut viewer = Viewer {
             context: egui::Context::default(),
             animation: None,
+            svg_worker: None,
+            pending_svg: None,
             pending_animation: false,
             uploads: crate::render::Uploads::new(None),
             staging_frame: 0,

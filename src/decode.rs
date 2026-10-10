@@ -8,6 +8,8 @@ pub const MAX_DIMENSION: u32 = 16384;
 
 #[derive(Default)]
 pub struct Pixels {
+    pub svg: Option<std::sync::Arc<svg::Document>>,
+    pub svg_scale: f32,
     pub animation_delay: Option<std::time::Duration>,
     pub size: [usize; 2],
     pub rgba: Vec<u8>,
@@ -190,6 +192,7 @@ fn decode_encoded(format: crate::formats::Format, encoded: Vec<u8>) -> Result<Pi
             levels,
             warning,
             animation_delay: None,
+            ..Default::default()
         })
     } else if high_depth {
         let mut rgba16 = image.into_rgba16().into_raw();
@@ -203,6 +206,7 @@ fn decode_encoded(format: crate::formats::Format, encoded: Vec<u8>) -> Result<Pi
             levels,
             warning,
             animation_delay: None,
+            ..Default::default()
         })
     } else {
         let mut rgba = image.into_rgba8().into_raw();
@@ -216,6 +220,7 @@ fn decode_encoded(format: crate::formats::Format, encoded: Vec<u8>) -> Result<Pi
             warning,
             rgba16: None,
             animation_delay: None,
+            ..Default::default()
         })
     }
 }
@@ -257,7 +262,7 @@ fn checked_size(width: u32, height: u32, dimension_limit: u32) -> Result<[usize;
 
 mod avif;
 mod jxl;
-mod svg;
+pub mod svg;
 
 #[cfg(test)]
 mod format_tests;

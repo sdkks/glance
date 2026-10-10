@@ -31,6 +31,10 @@ impl View {
         self.pan = Vec2::ZERO;
     }
 
+    pub fn exact_svg_scale(&self) -> bool {
+        self.scale.is_none() || self.scale == Some(1.0)
+    }
+
     pub fn scale(&self, canvas: Rect, image: [usize; 2], ppp: f32) -> f32 {
         self.scale.unwrap_or_else(|| fit_scale(canvas, image, ppp))
     }

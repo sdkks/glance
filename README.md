@@ -345,11 +345,25 @@ are rejected by name; there is no network or local-file resource resolver.
 Each embedded raster is limited to 4096 pixels per side and 64 MiB RGBA;
 expanded gzip XML is limited to 64 MiB. Nested raster ICC is not normalized by
 this path. Relative sizes use usvg's default viewport (100×100) and SVG viewBox
-rules, not a browser viewport. This increment rasterizes once at intrinsic size
-(on the loader worker), keeps straight U8 plus ordinary rendering levels, and
-copies that intrinsic-size bitmap. It does **not** retain the parsed tree or
-re-rasterize at zoom/DPI thresholds: enlargement is a raster preview and may
-pixelate. Scale-aware sharp vector zoom remains unfinished, not claimed here.
+rules, not a browser viewport. The parsed tree is retained with the resident;
+an off-thread, single-slot worker re-rasterizes into the ordinary U8 source,
+levels and tiles. Fit follows the fitted physical size (including DPI); Actual
+Size uses one SVG unit per physical pixel. Fit/Actual Size changes request the
+exact target scale (0.1% tolerance); zoom requests a new raster when the needed
+scale exceeds 1.5× the current/requested raster scale, or the raster is over
+2.5× oversized. The previous raster stays visible, scaled, until all replacement
+visible tiles are ready; obsolete scale/selection revisions cannot replace it.
+Copy Image always re-rasterizes at intrinsic size before applying user transforms,
+not at the display resolution. Raster requests are checked before allocation:
+16384 pixels per side and 512 MiB straight RGBA8 (134,217,728 pixels), with the
+existing per-level, tile residency and staging bounds. Beyond these limits a
+named SVG resource error retains the previous display, not an unbounded raster.
+The parsed tree, embedded images, renderer scratch and clipboard copies are
+additional allocations, not a total-process RSS guarantee; cache accounting
+continues to count straight pixels plus rendering levels. One running SVG job,
+one replaceable pending target and one result prevent a queue per wheel event.
+Embedded rasters do not gain vector detail when zoomed, and font appearance
+still depends on installed system fonts.
 
 ## Native AVIF development builds
 
