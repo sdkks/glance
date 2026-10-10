@@ -412,3 +412,34 @@ Core jxl-oxide 0.12.6, default features disabled, moxcms enabled (no image adapt
 | jxl-render | 0.12.4 | MIT OR Apache-2.0 | https://crates.io/crates/jxl-render/0.12.4 |
 | jxl-threadpool | 1.0.0 | MIT OR Apache-2.0 | https://crates.io/crates/jxl-threadpool/1.0.0 |
 | jxl-vardct | 0.11.1 | MIT OR Apache-2.0 | https://crates.io/crates/jxl-vardct/0.11.1 |
+
+## Static SVG additions
+
+Direct resvg 0.48.0 (text, system-fonts, raster-images; defaults disabled), reexported usvg 0.48.1 and tiny-skia 0.12.0; roxmltree 0.21.1 validates unsupported active content; flate2 1.1.10 is promoted from the existing graph for bounded SVGZ expansion. System fonts are read from the host, not bundled. No new license exception. Preserve upstream notices for the selected permissive licenses.
+
+| Crate | Version | Declared license | Source |
+| --- | --- | --- | --- |
+| arrayref | 0.3.9 | BSD-2-Clause | https://crates.io/crates/arrayref/0.3.9 |
+| base64 | 0.23.1 | MIT OR Apache-2.0 | https://crates.io/crates/base64/0.23.1 |
+| data-url | 0.3.2 | MIT OR Apache-2.0 | https://crates.io/crates/data-url/0.3.2 |
+| float-cmp | 0.9.0 | MIT | https://crates.io/crates/float-cmp/0.9.0 |
+| fontconfig-parser | 0.5.8 | MIT | https://crates.io/crates/fontconfig-parser/0.5.8 |
+| fontdb | 0.24.0 | MIT | https://crates.io/crates/fontdb/0.24.0 |
+| imagesize | 0.15.0 | MIT | https://crates.io/crates/imagesize/0.15.0 |
+| pico-args | 0.5.0 | MIT | https://crates.io/crates/pico-args/0.5.0 |
+| resvg | 0.48.0 | Apache-2.0 OR MIT | https://crates.io/crates/resvg/0.48.0 |
+| rgb | 0.8.53 | MIT | https://crates.io/crates/rgb/0.8.53 |
+| roxmltree | 0.20.0 | MIT OR Apache-2.0 | https://crates.io/crates/roxmltree/0.20.0 |
+| roxmltree | 0.21.1 | MIT OR Apache-2.0 | https://crates.io/crates/roxmltree/0.21.1 |
+| simplecss | 0.2.2 | Apache-2.0 OR MIT | https://crates.io/crates/simplecss/0.2.2 |
+| siphasher | 1.0.4 | MIT OR Apache-2.0 | https://crates.io/crates/siphasher/1.0.4 |
+| strict-num | 0.1.1 | MIT | https://crates.io/crates/strict-num/0.1.1 |
+| svgtypes | 0.16.1 | Apache-2.0 OR MIT | https://crates.io/crates/svgtypes/0.16.1 |
+| tiny-skia | 0.12.0 | BSD-3-Clause | https://crates.io/crates/tiny-skia/0.12.0 |
+| tiny-skia-path | 0.12.0 | BSD-3-Clause | https://crates.io/crates/tiny-skia-path/0.12.0 |
+| tinyvec | 1.13.3 | Zlib OR Apache-2.0 OR MIT | https://crates.io/crates/tinyvec/1.13.3 |
+| unicode-bidi | 0.3.18 | MIT OR Apache-2.0 | https://crates.io/crates/unicode-bidi/0.3.18 |
+| unicode-script | 0.5.8 | MIT OR Apache-2.0 | https://crates.io/crates/unicode-script/0.5.8 |
+| unicode-vo | 0.1.0 | MIT/Apache-2.0 | https://crates.io/crates/unicode-vo/0.1.0 |
+| usvg | 0.48.1 | Apache-2.0 OR MIT | https://crates.io/crates/usvg/0.48.1 |
+| xmlwriter | 0.1.0 | MIT | https://crates.io/crates/xmlwriter/0.1.0 |

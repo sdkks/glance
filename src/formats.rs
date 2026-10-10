@@ -16,6 +16,8 @@ pub enum Format {
     Pcx,
     Sgi,
     Jxl,
+    Svg,
+    Svgz,
 }
 
 pub fn format(path: &Path) -> Option<Format> {
@@ -36,6 +38,8 @@ pub fn format(path: &Path) -> Option<Format> {
         b"xbm" => Format::Xbm,
         b"xpm" => Format::Xpm,
         b"pcx" => Format::Pcx,
+        b"svg" => Format::Svg,
+        b"svgz" => Format::Svgz,
         b"jxl" => Format::Jxl,
         b"sgi" | b"bw" | b"rgb" | b"rgba" => Format::Sgi,
         _ => return None,
@@ -63,6 +67,11 @@ pub fn decoder(
         Format::Xbm => Box::new(image_extras::xbm::XbmDecoder::new(cursor)?),
         Format::Xpm => Box::new(image_extras::xpm::XpmDecoder::new(cursor)?),
         Format::Pcx => Box::new(image_extras::pcx::PCXDecoder::new(cursor)?),
+        Format::Svg | Format::Svgz => {
+            return Err(LoadError::UnsupportedVariant(
+                "SVG: use static renderer".into(),
+            ));
+        }
         Format::Jxl => {
             return Err(LoadError::UnsupportedVariant(
                 "JXL: use core decoder".into(),

@@ -115,6 +115,12 @@ pub(crate) fn read_encoded(path: &Path) -> Result<Vec<u8>, LoadError> {
 }
 
 fn decode_encoded(format: crate::formats::Format, encoded: Vec<u8>) -> Result<Pixels, LoadError> {
+    if matches!(
+        format,
+        crate::formats::Format::Svg | crate::formats::Format::Svgz
+    ) {
+        return svg::decode(&encoded, matches!(format, crate::formats::Format::Svgz));
+    }
     if matches!(format, crate::formats::Format::Jxl) {
         return jxl::decode(&encoded);
     }
@@ -247,6 +253,7 @@ fn checked_size(width: u32, height: u32, dimension_limit: u32) -> Result<[usize;
 }
 
 mod jxl;
+mod svg;
 
 #[cfg(test)]
 mod format_tests;

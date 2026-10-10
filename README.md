@@ -338,6 +338,19 @@ tracked allocations are capped at 512 MiB; upstream untracked scratch is not
 an RSS guarantee. The original test fixture is a constant 3×2 PPM encoded
 losslessly by cjxl 0.10.2; no borrowed image assets are used.
 
+SVG/SVGZ (`svg`, `svgz`) use resvg 0.48.0 / usvg 0.48.1 / tiny-skia 0.12.0
+for static shapes, text (system fonts), and bounded embedded JPEG/PNG/GIF/WebP.
+Scripts/events, animation, foreignObject, nested SVG and external image files
+are rejected by name; there is no network or local-file resource resolver.
+Each embedded raster is limited to 4096 pixels per side and 64 MiB RGBA;
+expanded gzip XML is limited to 64 MiB. Nested raster ICC is not normalized by
+this path. Relative sizes use usvg's default viewport (100×100) and SVG viewBox
+rules, not a browser viewport. This increment rasterizes once at intrinsic size
+(on the loader worker), keeps straight U8 plus ordinary rendering levels, and
+copies that intrinsic-size bitmap. It does **not** retain the parsed tree or
+re-rasterize at zoom/DPI thresholds: enlargement is a raster preview and may
+pixelate. Scale-aware sharp vector zoom remains unfinished, not claimed here.
+
 ## Current limits and remaining work
 
 Input reads are bounded at 64 MiB. Decoder output and normalized straight output
