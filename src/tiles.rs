@@ -40,8 +40,8 @@ pub fn tile(size: [usize; 2], key: Key, core: usize) -> Tile {
 }
 
 impl Tile {
-    pub fn bytes(self) -> usize {
-        (self.size[0] + 2) * (self.size[1] + 2) * 4
+    pub fn bytes_at_depth(self, bytes_per_pixel: usize) -> usize {
+        (self.size[0] + 2) * (self.size[1] + 2) * bytes_per_pixel
     }
     pub fn domain(self, size: [usize; 2]) -> [f32; 4] {
         [
@@ -54,7 +54,8 @@ impl Tile {
 }
 
 pub fn gutter(level: &Level, tile: Tile) -> Result<Vec<u8>, LoadError> {
-    let mut data = allocation(tile.bytes())?;
+    let bpp = level.bytes_per_pixel();
+    let mut data = allocation(tile.bytes_at_depth(bpp))?;
     let width = tile.size[0] + 2;
     for y in 0..tile.size[1] + 2 {
         let sy = (tile.origin[1] + y)
@@ -64,9 +65,9 @@ pub fn gutter(level: &Level, tile: Tile) -> Result<Vec<u8>, LoadError> {
             let sx = (tile.origin[0] + x)
                 .saturating_sub(1)
                 .min(level.size[0] - 1);
-            let from = (sy * level.size[0] + sx) * 4;
-            let to = (y * width + x) * 4;
-            data[to..to + 4].copy_from_slice(&level.rgba[from..from + 4]);
+            let from = (sy * level.size[0] + sx) * bpp;
+            let to = (y * width + x) * bpp;
+            data[to..to + bpp].copy_from_slice(&level.rgba[from..from + bpp]);
         }
     }
     Ok(data)
@@ -185,6 +186,7 @@ mod tests {
         let l = Level {
             size: [5, 3],
             rgba: (0..15).flat_map(|v| [v, v, v, 255]).collect(),
+            half: false,
         };
         let left = tile(
             l.size,

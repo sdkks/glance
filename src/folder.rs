@@ -264,7 +264,7 @@ pub enum Direction {
 
 pub fn eligible(path: &std::path::Path) -> bool {
     path.extension().is_some_and(|extension| {
-        [b"jpg".as_slice(), b"jpeg", b"png"]
+        [b"jpg".as_slice(), b"jpeg", b"png", b"tif", b"tiff"]
             .iter()
             .any(|allowed| extension.as_encoded_bytes().eq_ignore_ascii_case(allowed))
     })

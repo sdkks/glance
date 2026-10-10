@@ -8,8 +8,10 @@ clearance. No GPL qView code/assets, native codec provisioning, or modified upst
 source is included. Direct dependencies: eframe 0.36.2 (MIT OR Apache-2.0), image
 0.25.10 (MIT OR Apache-2.0), rfd 0.17.2 (MIT), arboard 3.6.1 (MIT OR Apache-2.0),
 and macOS-only objc2 0.6.5 (MIT), objc2-app-kit 0.3.2 (Zlib OR Apache-2.0 OR MIT),
-objc2-foundation 0.3.2 (MIT). These clipboard adapters promote already-resolved
-packages to direct dependencies; the resolved package inventory is unchanged.
+objc2-foundation 0.3.2 (MIT), moxcms 0.8.1 (BSD-3-Clause OR Apache-2.0), and
+half 2.7.1 (MIT OR Apache-2.0). Color/half-float and clipboard adapters promote
+already-resolved packages to direct dependencies; the resolved package inventory
+is unchanged. TIFF is now directly enabled in image (already resolved transitively).
 
 The graph uses permissive licenses (including MIT/Apache/BSD/ISC/Zlib/Unicode).
 For OR expressions, a compatible permissive alternative is available. Preserve

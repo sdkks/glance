@@ -78,7 +78,13 @@ impl Transform {
             .and_then(|n| n.checked_mul(4))
             .filter(|n| *n as u64 <= MAX_DECODED_BYTES)
             .ok_or_else(|| LoadError::ResourceLimit("Copy Image RGBA8 size".into()))?;
-        if width == 0 || height == 0 || bytes != pixels.rgba.len() {
+        let valid = pixels
+            .rgba16
+            .as_ref()
+            .map_or(bytes == pixels.rgba.len(), |p| {
+                p.len() == bytes && pixels.rgba.is_empty()
+            });
+        if width == 0 || height == 0 || !valid {
             return Err(LoadError::ResourceLimit(
                 "Copy Image invalid pixel payload".into(),
             ));
@@ -91,15 +97,16 @@ impl Transform {
         for y in 0..size[1] {
             for x in 0..size[0] {
                 let [sx, sy] = self.source_pixel([x, y], pixels.size);
-                let from = (sy * width + sx) * 4;
+                let from = sy * width + sx;
                 let to = (y * size[0] + x) * 4;
-                rgba[to..to + 4].copy_from_slice(&pixels.rgba[from..from + 4]);
+                rgba[to..to + 4].copy_from_slice(&pixels.clipboard_pixel(from));
             }
         }
         Ok(Pixels {
             size,
             rgba,
             levels: vec![],
+            ..Default::default()
         })
     }
 }
@@ -112,6 +119,7 @@ mod tests {
             size: [3, 2],
             rgba: (0..6).flat_map(|n| [n, n + 10, n + 20, n * 40]).collect(),
             levels: vec![],
+            ..Default::default()
         }
     }
     fn labels(pixels: &Pixels) -> Vec<u8> {
@@ -230,16 +238,19 @@ mod tests {
                 size: [usize::MAX, 2],
                 rgba: vec![],
                 levels: vec![],
+                ..Default::default()
             },
             Pixels {
                 size: [0, 2],
                 rgba: vec![],
                 levels: vec![],
+                ..Default::default()
             },
             Pixels {
                 size: [3, 2],
                 rgba: vec![0; 4],
                 levels: vec![],
+                ..Default::default()
             },
         ] {
             assert!(matches!(

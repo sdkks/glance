@@ -36,7 +36,7 @@ pub struct Image {
     uploads: Arc<Mutex<Uploads>>,
 }
 
-// One tile (at most 4 MiB, plus its CPU gutter copy) may be in flight for
+// One tile (at most 8 MiB, plus its CPU gutter copy) may be in flight for
 // the entire viewer, including cancelled selections. Never accumulate driver
 // staging by submitting faster than the GPU retires it.
 #[derive(Default)]
@@ -279,8 +279,10 @@ impl Image {
     ) -> Result<Option<tiles::CoverageReady>, LoadError> {
         let mut uploads = self.uploads.lock().expect("upload budget lock poisoned");
         uploads.maintain(frame, &state.device)?;
-        let bytes =
-            |key: &Key| tiles::tile(self.pixels.levels[key.level].size, *key, self.core).bytes();
+        let bytes = |key: &Key| {
+            let level = &self.pixels.levels[key.level];
+            tiles::tile(level.size, *key, self.core).bytes_at_depth(level.bytes_per_pixel())
+        };
         if visible.iter().map(bytes).sum::<usize>() > tiles::RESIDENT_BYTES {
             return Err(LoadError::ResourceLimit(
                 "Visible GPU tiles exceed 128 MiB residency".into(),
@@ -340,7 +342,11 @@ impl Image {
                     mip_level_count: 1,
                     sample_count: 1,
                     dimension: wgpu::TextureDimension::D2,
-                    format: wgpu::TextureFormat::Rgba8UnormSrgb,
+                    format: if level.half {
+                        wgpu::TextureFormat::Rgba16Float
+                    } else {
+                        wgpu::TextureFormat::Rgba8UnormSrgb
+                    },
                     usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
                     view_formats: &[],
                 });
@@ -349,7 +355,9 @@ impl Image {
                     &data,
                     wgpu::TexelCopyBufferLayout {
                         offset: 0,
-                        bytes_per_row: Some((tile.size[0] + 2) as u32 * 4),
+                        bytes_per_row: Some(
+                            (tile.size[0] + 2) as u32 * level.bytes_per_pixel() as u32,
+                        ),
                         rows_per_image: Some((tile.size[1] + 2) as u32),
                     },
                     texture.size(),

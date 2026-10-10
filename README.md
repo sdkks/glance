@@ -2,7 +2,7 @@
 
 An independently authored MIT desktop image viewer, built with Rust and
 eframe/egui's wgpu renderer. This first increment opens **JPEG (`jpg`, `jpeg`)
-and PNG**; it is not yet the complete planned viewer.
+and PNG/TIFF** (primary TIFF image); it is not yet the complete planned viewer.
 
 ```sh
 make run ARGS='/absolute/path/to/image.png'
@@ -68,7 +68,7 @@ repaint timer.
 **Settings → Preload depth** offers Off / 1 / 2 / 3 / 4 / 5, with an active radio
 indicator. Default is 1; this is session-only and writes no configuration. Once a
 selection settles, up to N images ahead and behind are decoded into the same
-oriented RGBA8 source and rendering levels used by foreground loads. Prefetch stays
+oriented straight U8/U16 source and rendering levels used by foreground loads. Prefetch stays
 CPU-only until admission: a hit skips decoding but stages visible tiles through
 the ordinary atomic swap. Up to N recently admitted images retain CPU sources
 and levels, **not inactive GPU textures**. History hits therefore skip decode and
@@ -91,7 +91,7 @@ GPU staging and clipboard copies are **additional bounded/transient allocations*
 not included in the resident cache budget and not a process-RSS guarantee. A
 running synchronous prefetch codec may finish after cancellation; its stale
 result is discarded, never admitted. No neighboring animation runs; this version
-still only dispatches JPEG and static PNG.
+still only dispatches JPEG and static PNG/TIFF.
 
 Before navigation/sort, the foreground worker rescans and checks path, size,
 modification time and Unix device/inode/change time. Removed or changed entries
@@ -109,6 +109,9 @@ accessible with Tab/Shift+Tab and Enter/Space. No Cmd/Ctrl+V shortcut is adverti
 eframe's input adapter consumes that key for text-only clipboard events, which
 would not reliably invoke native file-list Paste. Copy Image copies the complete decoded
 image with embedded orientation, current user transforms, and straight alpha,
+with color normalization applied. High-depth sources are downconverted to an
+8-bit sRGB clipboard bitmap only when copying (a clipboard limitation, not a
+presentation downgrade),
 not a viewport crop or a zoomed preview. Copy File copies a native local file
 reference separately. During a pending or failed load, copy/reveal refer to the
 resident actually displayed, not the provisional selection shown in the title.
@@ -134,25 +137,68 @@ pending reveal process is polled non-blockingly. Human verification is still
 needed for transformed alpha pasting into Preview/other receiving applications,
 native file-reference round trips, Finder selection, and transform/input feel.
 
+## Color and depth
+
+Embedded ordinary RGB ICC matrix and LUT profiles are converted to sRGB by pinned
+moxcms 0.8.1, using relative-colorimetric intent and explicit gamut clipping.
+Untagged RGB is treated as sRGB. Metadata is read before consuming the decoder.
+JPEG and PNG provide ICC; TIFF provides ICC and orientation; PNG has EXIF-based
+orientation via the decoder trait default. WebP has both metadata methods in the
+pinned source but is not dispatched in this increment. The title discloses
+`ICC fallback: unsupported/invalid profile; assuming sRGB` when parsing/conversion
+fails or a profile exceeds our 4 MiB profile/CLUT caps. Alpha bypasses the CMS.
+Failed conversions retain original samples, never a partially converted image.
+CMYK/YCCK JPEG and CMYK TIFF use the codec's approximate RGB preview, explicitly
+labelled `CMYK approximate SDR preview (not profile-accurate)`; their ICC is never
+applied to already-converted RGB. This is not monitor-profile-aware output or proofing.
+
+16-bit PNG/TIFF retain straight U16 encoded-sRGB samples through normalization and
+for source ownership. Their rendering levels and tiles use RGBA16F **linear-light
+premultiplied RGB and linear alpha**. GPU filtering consumes linear half floats
+without an extra transfer function or premultiplication. Half precision does not
+preserve all 65,536 source values, but the procedural gradient test retains more
+than 256 distinct values in the base and reduced levels and gutter payloads.
+Final display precision still depends on the SDR attachment/monitor.
+Ordinary 8-bit images retain the encoded premultiplied RGBA8 path below.
+
+Float TIFF is a disclosed **scene-linear sRGB assumption** preview: fixed exposure
+1, luminance extended Reinhard `Yout = Y × (1 + Y/16) / (1 + Y)`, white point 4,
+RGB ratios preserved before clipping to [0,1]. It never meters exposure per frame.
+NaN, negative infinity and negative radiance become zero; positive infinity becomes
+radiance 4; finite radiance is capped at 1e20 for finite arithmetic. Nonfinite alpha
+becomes zero; finite alpha clamps to [0,1]. Float ICC is not applied and is disclosed.
+Normalized SDR remains U16 before half-float presentation.
+
+EXR/Radiance HDR codecs are **not enabled in this pinned feature graph**; their
+integration and float-EXR release smoke are deferred, not claimed supported. PQ,
+HLG and ACES metadata paths are likewise not integrated. Proposed future conventions
+remain PQ absolute luminance divided by 203 cd/m² reference white, and HLG fixed
+BT.2100 1000-cd/m² display/system gamma 1.2, without per-frame exposure; these are
+not verified current behavior. Human visual ICC/photo/alpha checks and Linux
+validation remain outstanding.
+
 ## Current limits and remaining work
 
-Input reads are bounded at 64 MiB. Decoder output and RGBA8 output are each bounded
-at 512 MiB; sides are limited to 16384 pixels, **independently of the GPU's
-single-texture limit**. `image::Limits` explicitly bounds dimensions and requests a
+Input reads are bounded at 64 MiB. Decoder output and normalized straight output
+are each bounded at 512 MiB; U8 RGBA uses 4 bytes/pixel, U16 uses 8, and float
+working RGBA uses 16 (also checked against 512 MiB before conversion). Sides are
+limited to 16384 pixels, **independently of the GPU's single-texture limit**. `image::Limits` explicitly bounds dimensions and requests a
 512 MiB decoder allocation cap; the allocation cap is best-effort upstream,
 not a total process-RSS guarantee. Input, decode/conversion, UI texture staging,
 and GPU/native allocations may coexist. The displayed resident retains its
-oriented straight CPU RGBA8 pixels for Copy Image alongside rendering levels.
+oriented straight CPU U8/U16 pixels for Copy Image alongside rendering levels.
 Transitions retain the previous image while preparing the next visible tile set,
 not a total 512 MiB budget. Copy Image allocates another full RGBA8 bitmap, checked against the
 same 512 MiB per-buffer limit with a fallible allocation; native clipboard encoding
 may allocate further buffers. Failure is named, never a reduced-size copy. Two workers with bounded pending/result
 slots prevent growth per keypress; the resident cache envelope is described above.
-These calibration values were raised after real 38MP content was rejected.
+These are the combined color/rendering envelope, superseding the interim
+source-only calibration. A 38MP 16-bit RGBA source is about 292 MiB; its full
+half-float pyramid is normally about 389 MiB, fitting the per-buffer limits.
 
 ## Rendering: minification and full detail
 
-Loader workers generate a dyadic pyramid after embedded orientation/RGBA8 conversion,
+Loader workers generate a dyadic pyramid after embedded orientation/color normalization,
 not on the UI thread. Each child side is `max(1, floor(parent_side / 2))`.
 A child pixel averages the complete parent box from `floor(i × parent / child)`
 to `floor((i + 1) × parent / child)` (exclusive), so odd-edge remainder texels
@@ -167,8 +213,8 @@ then sRGB-encoded into RGBA8; alpha is linear. Hardware sRGB texture sampling
 linearizes RGB before filtering. Generation decodes the same convention before
 averaging; the shader blends already-premultiplied RGB and composites over the
 dark canvas without multiplying alpha a second time. The straight source is kept
-separately for Copy Image. This is still an 8-bit presentation boundary, not an
-ICC/high-depth normalization implementation. Checker averages have a declared
+separately for Copy Image. U16 sources instead use the linear half-float convention
+above. Checker averages have a declared
 linear-channel tolerance of 0.004 and premultiply/unpremultiply roundtrip tolerance
 of 0.006 for the unit reference patterns. Human photo/shimmer/halo checks remain
 necessary; these numerical checks are not a visual-quality certification.
@@ -187,8 +233,9 @@ level are uploaded. GPU textures have a **128 MiB per-renderer LRU budget**;
 offscreen tiles are evicted first, and the complete current visible set is protected.
 A viewport whose mandatory visible set exceeds that budget reports a named resource
 error rather than displaying partial detail. CPU gutter buffers and queued uploads
-are bounded to **16 MiB**: each at-most-4-MiB upload is submitted and drained before
-the next. Device waits have a five-second failure timeout. Creation/upload validation,
+are bounded to **16 MiB**: each at-most-8-MiB high-depth upload (4 MiB for U8)
+is submitted and drained before
+the next. Creation/upload validation,
 internal and allocation errors become `Display unavailable` errors. A failed load
 or staging operation retains the prior image and navigation. Replacement admission
 requires a complete-visible-coverage witness, never the first successful tile.
@@ -200,13 +247,19 @@ residency. Driver-internal allocations and release timing are not a process-RSS
 promise. The straight source plus levels is bounded by **1.5 GiB per payload**;
 the dynamic resident CPU cache thus has a conservative **3 GiB** maximum. Each of
 the two bounded worker slots and an awaiting-admission replacement may additionally
-hold one such payload. Encoded input (64 MiB per worker), decoder/conversion scratch,
-clipboard output and backend allocations are separate transient costs. These are
-conservative application payload bounds, not a guaranteed total RSS ceiling.
+hold one such payload. Encoded input (64 MiB per worker), orientation/conversion
+scratch (up to two additional 512 MiB image buffers per worker), transactional ICC
+output (one extra normalized-source-sized buffer, at most 512 MiB), and CMS
+profile/tables (4 MiB profile/CLUT caps, 65,536 TRC entries; CMS internal tables
+are additional bounded-by-transform costs) can coexist transiently. U16 doubles
+sample/tile bytes, not the fixed byte caps: it reduces maximum admitted pixel
+count. Clipboard output is at most 512 MiB plus native encoding/backend costs.
+These are conservative application payload bounds, not a guaranteed total RSS
+ceiling; allocator/codec/driver allocations remain outside an exact reservation
+tracker.
 
 Embedded orientation is applied once. Output encoding follows the actual attachment
-format (hardware sRGB encoding or explicit OETF, never both). Deliberate ICC/SDR
-conversion and high-depth presentation are **not implemented yet**. Other formats
+format (hardware sRGB encoding or explicit OETF, never both). Other formats
 (including explicitly deferred XCF) give an unsupported-format
 error. Animation, native menus/document-open
 integration, packaging and Linux desktop validation are later increments.
@@ -292,8 +345,9 @@ Glance is MIT; see `LICENSE`. Direct dependencies are pinned to eframe 0.36.2
 (MIT OR Apache-2.0), image 0.25.10 (MIT OR Apache-2.0), rfd 0.17.2 (MIT), arboard
 3.6.1 (MIT OR Apache-2.0), and the macOS-only objc2 0.6.5 (MIT), objc2-app-kit 0.3.2
 (Zlib OR Apache-2.0 OR MIT), and objc2-foundation 0.3.2 (MIT).
-The viewer directly enables only image's JPEG/PNG codecs, but eframe's transitive
-clipboard integration also enables TIFF in the resolved image graph; the viewer
-does not dispatch TIFF. egui's bundled default fonts have their own notices.
+The viewer directly enables image's JPEG/PNG/TIFF codecs. Color conversion uses
+moxcms 0.8.1 (BSD-3-Clause OR Apache-2.0); RGBA16F packing uses half 2.7.1
+(MIT OR Apache-2.0), promoted from the existing resolved graph. egui's bundled
+default fonts have their own notices.
 See `THIRD_PARTY.md` for the resolved crate/license inventory and distribution
 limitations. No third-party library source has been modified.
