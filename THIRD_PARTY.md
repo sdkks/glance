@@ -22,6 +22,18 @@ source-development inventory, **not a complete binary redistribution notice
 bundle**. Packaging must gather exact crate/native/font notices for the shipping
 target before release; no packaged distribution is supplied in this increment.
 
+## App artwork provenance
+
+The app icons are independently authored, human-supplied artwork for this MIT
+app, supplied on 2026-10-10 as `glance app assets.jpg`, with cropping instructions
+in `glance app splice images.md`. No qView/GPL assets or third-party icon sets
+are used. The five exact scaled crops are preserved under `assets/icon/`;
+the two 1024×1024 platform masters are derived from the square macOS and round
+Linux crops. See README for the literal coordinate handling and regeneration.
+The original Downloads files are not needed to build or regenerate the icons.
+Pillow 12.3.0 was used only for the initial instructed crop in a temporary
+workspace; it is not a project, runtime, or regeneration dependency.
+
 ## Bundled fonts
 
 `epaint_default_fonts` 0.36.2 embeds Hack, Noto Emoji, Ubuntu Light, and emoji-icon-font.
