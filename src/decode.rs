@@ -8,8 +8,8 @@ use std::{
 use image::{DynamicImage, ImageDecoder, ImageError, ImageFormat, ImageReader, Limits};
 
 pub const MAX_ENCODED_BYTES: u64 = 64 * 1024 * 1024;
-pub const MAX_DECODED_BYTES: u64 = 128 * 1024 * 1024;
-pub const MAX_DIMENSION: u32 = 8192;
+pub const MAX_DECODED_BYTES: u64 = 512 * 1024 * 1024;
+pub const MAX_DIMENSION: u32 = 16384;
 
 pub struct Pixels {
     pub size: [usize; 2],
@@ -93,9 +93,11 @@ pub fn load(path: &Path, texture_limit: u32) -> Result<Pixels, LoadError> {
     let (width, height) = decoder.dimensions();
     let size = checked_size(width, height, dimension_limit)?;
     if decoder.total_bytes() > MAX_DECODED_BYTES {
-        return Err(LoadError::ResourceLimit(
-            "decoded samples exceed 128 MiB".into(),
-        ));
+        return Err(LoadError::ResourceLimit(format!(
+            "decoded samples exceed {} MiB; decoded RGBA8 budget {} MiB, maximum side {dimension_limit}",
+            MAX_DECODED_BYTES / (1024 * 1024),
+            MAX_DECODED_BYTES / (1024 * 1024)
+        )));
     }
     let orientation = decoder.orientation()?;
     let mut image = DynamicImage::from_decoder(decoder)?;
@@ -124,7 +126,8 @@ fn checked_size(width: u32, height: u32, dimension_limit: u32) -> Result<[usize;
         || bytes.is_none_or(|bytes| bytes > MAX_DECODED_BYTES)
     {
         return Err(LoadError::ResourceLimit(format!(
-            "{width} × {height}; maximum side {dimension_limit}, RGBA8 maximum 128 MiB"
+            "{width} × {height}; maximum side {dimension_limit}, decoded RGBA8 budget {} MiB",
+            MAX_DECODED_BYTES / (1024 * 1024)
         )));
     }
     let width = usize::try_from(width)
@@ -156,6 +159,29 @@ mod tests {
     }
 
     #[test]
+    fn large_photo_fits_decoded_budget() {
+        assert_eq!(
+            checked_size(7688, 4976, MAX_DIMENSION).unwrap(),
+            [7688, 4976]
+        );
+    }
+
+    #[test]
+    fn decoded_budget_boundary_is_checked_without_allocating() {
+        let width = MAX_DIMENSION;
+        let height = (MAX_DECODED_BYTES / (u64::from(width) * 4)) as u32;
+        assert!(checked_size(width, height, MAX_DIMENSION).is_ok());
+        let error = checked_size(width, height + 1, MAX_DIMENSION).unwrap_err();
+        assert!(matches!(error, LoadError::ResourceLimit(_)));
+        let message = error.to_string();
+        assert!(message.contains(&format!(
+            "decoded RGBA8 budget {} MiB",
+            MAX_DECODED_BYTES / (1024 * 1024)
+        )));
+        assert!(message.contains(&format!("maximum side {MAX_DIMENSION}")));
+    }
+
+    #[test]
     fn errors_are_recoverable_and_limits_are_checked() {
         let dir = TempDir::new();
         let corrupt = dir.0.join("bad.png");
@@ -174,7 +200,7 @@ mod tests {
         ));
         assert!(checked_size(u32::MAX, u32::MAX, u32::MAX).is_err());
         assert!(checked_size(0, 10, MAX_DIMENSION).is_err());
-        assert!(checked_size(8192, 8192, MAX_DIMENSION).is_err());
+        assert!(checked_size(MAX_DIMENSION + 1, 1, MAX_DIMENSION).is_err());
         assert!(checked_size(3000, 2000, MAX_DIMENSION).is_ok());
         image::RgbImage::new(3, 2)
             .save(dir.0.join("wide.png"))
