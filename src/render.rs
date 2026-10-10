@@ -6,10 +6,14 @@ use eframe::{
 };
 use wgpu::util::DeviceExt;
 
-use crate::decode::{LoadError, Pixels};
+use crate::{
+    decode::{LoadError, Pixels},
+    transform::Transform,
+};
 
 pub struct Image {
     pub size: [usize; 2],
+    pub pixels: Pixels,
     pipeline: wgpu::RenderPipeline,
     layout: wgpu::BindGroupLayout,
     texture: wgpu::TextureView,
@@ -138,6 +142,7 @@ impl Image {
         });
         Ok(Arc::new(Self {
             size: pixels.size,
+            pixels,
             pipeline,
             layout,
             texture: texture.create_view(&Default::default()),
@@ -150,6 +155,7 @@ impl Image {
         device: &wgpu::Device,
         canvas: egui::Rect,
         rect: egui::Rect,
+        transform: Transform,
     ) -> egui::PaintCallback {
         let bounds = [
             2.0 * (rect.left() - canvas.left()) / canvas.width() - 1.0,
@@ -157,7 +163,12 @@ impl Image {
             2.0 * (rect.right() - canvas.left()) / canvas.width() - 1.0,
             1.0 - 2.0 * (rect.bottom() - canvas.top()) / canvas.height(),
         ];
-        let bytes: Vec<u8> = bounds.iter().flat_map(|n| n.to_ne_bytes()).collect();
+        let rows = transform.uv_rows();
+        let bytes: Vec<u8> = bounds
+            .iter()
+            .chain(rows.iter().flatten())
+            .flat_map(|n| n.to_ne_bytes())
+            .collect();
         let buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("image framing"),
             contents: &bytes,

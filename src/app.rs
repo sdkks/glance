@@ -6,6 +6,7 @@ use crate::{
     folder::{Direction, Folder, Sort},
     loader::{Completion, Loader, Request},
     render::Image,
+    transform::Operation,
     view::View,
 };
 
@@ -22,6 +23,7 @@ struct Display<T> {
     image: Option<T>,
     status: Status,
     generation: u64,
+    path: Option<PathBuf>,
 }
 
 impl<T> Display<T> {
@@ -30,6 +32,7 @@ impl<T> Display<T> {
             image: None,
             status,
             generation: 0,
+            path: None,
         }
     }
 
@@ -43,17 +46,27 @@ impl<T> Display<T> {
 
     fn clear(&mut self) {
         self.image = None;
+        self.path = None;
         self.status = Status::Empty;
     }
 
-    fn finish(&mut self, generation: u64, ready: Result<T, String>, view: &mut View) -> bool {
+    fn finish(
+        &mut self,
+        generation: u64,
+        ready: Result<T, String>,
+        path: Option<PathBuf>,
+        view: &mut View,
+    ) -> bool {
         if generation != self.generation {
             return false;
         }
         match ready {
             Ok(image) => {
                 self.image = Some(image);
-                view.fit();
+                if path.is_none() || self.path != path {
+                    view.reset();
+                }
+                self.path = path;
                 self.status = Status::Ready;
                 true
             }
@@ -73,6 +86,12 @@ enum Command {
     Fit,
     ActualSize,
     Zoom(f32),
+    Transform(Operation),
+    Reset,
+    CopyImage,
+    CopyFile,
+    Paste,
+    Reveal,
 }
 
 pub struct Viewer {
@@ -85,6 +104,9 @@ pub struct Viewer {
     sort: Sort,
     view: View,
     render_state: Option<eframe::egui_wgpu::RenderState>,
+    clipboard: Option<arboard::Clipboard>,
+    action_error: Option<String>,
+    reveal_child: Option<std::process::Child>,
 }
 
 impl Viewer {
@@ -114,6 +136,9 @@ impl Viewer {
             sort: Sort::default(),
             view: View::default(),
             render_state: cc.wgpu_render_state.clone(),
+            clipboard: None,
+            action_error: None,
+            reveal_child: None,
         };
         if let Some(path) = initial {
             viewer.open(path);
@@ -199,10 +224,12 @@ impl Viewer {
             });
             // Upload stages all texels; wgpu orders these writes before the draw
             // in the next queue submission. No blank frame or GPU wait is needed.
-            if self
-                .display
-                .finish(result.generation, ready, &mut self.view)
-            {
+            if self.display.finish(
+                result.generation,
+                ready,
+                self.selected.clone(),
+                &mut self.view,
+            ) {
                 let size = self
                     .display
                     .image
@@ -219,6 +246,54 @@ impl Viewer {
                     size[1]
                 );
             }
+        }
+    }
+
+    fn desktop_action(&mut self, action: Command) -> Result<(), String> {
+        if matches!(action, Command::Reveal) {
+            if self.reveal_child.is_some() {
+                return Err("Reveal is still running; please wait before retrying.".into());
+            }
+            let path = self
+                .display
+                .path
+                .as_deref()
+                .ok_or("No displayed file to reveal.")?;
+            self.reveal_child = Some(crate::desktop::reveal(path)?);
+            return Ok(());
+        }
+        if self.clipboard.is_none() {
+            self.clipboard = Some(arboard::Clipboard::new().map_err(|error| {
+                format!("Clipboard unavailable; check your desktop session and retry: {error}")
+            })?);
+        }
+        let clipboard = self.clipboard.as_mut().expect("initialized clipboard");
+        match action {
+            Command::CopyImage => {
+                let image = self
+                    .display
+                    .image
+                    .as_ref()
+                    .ok_or("No displayed image to copy.")?;
+                crate::desktop::copy_image(clipboard, &image.pixels, self.view.transform)
+            }
+            Command::CopyFile => {
+                let path = self
+                    .display
+                    .path
+                    .as_deref()
+                    .ok_or("No displayed file to copy.")?;
+                clipboard
+                    .set()
+                    .file_list(&[path])
+                    .map_err(|error| format!("Copy File failed; clipboard unavailable: {error}"))
+            }
+            Command::Paste => {
+                let path = crate::desktop::paste(clipboard)?;
+                self.open(path);
+                Ok(())
+            }
+            _ => Ok(()),
         }
     }
 
@@ -270,6 +345,12 @@ impl Viewer {
     fn menus(&self, ui: &mut egui::Ui, command: &mut Option<Command>) {
         ui.menu_button("File", |ui| {
             menu_command(ui, "Open…  ⌘/Ctrl+O", Command::Open, command);
+            menu_command(ui, "Paste File", Command::Paste, command);
+            ui.add_enabled_ui(self.display.image.is_some(), |ui| {
+                menu_command(ui, "Copy Image", Command::CopyImage, command);
+                menu_command(ui, "Copy File", Command::CopyFile, command);
+                menu_command(ui, "Reveal in File Manager", Command::Reveal, command);
+            });
         });
         ui.menu_button("Navigate", |ui| {
             ui.add_enabled_ui(self.folder.is_some(), |ui| {
@@ -298,6 +379,20 @@ impl Viewer {
                     ("Actual Size (100%)  2", Command::ActualSize),
                     ("Zoom In  +", Command::Zoom(1.25)),
                     ("Zoom Out  −", Command::Zoom(0.8)),
+                    (
+                        "Rotate Clockwise  R",
+                        Command::Transform(Operation::Clockwise),
+                    ),
+                    (
+                        "Rotate Counterclockwise  Shift+R",
+                        Command::Transform(Operation::Counterclockwise),
+                    ),
+                    (
+                        "Mirror Horizontally  M",
+                        Command::Transform(Operation::Mirror),
+                    ),
+                    ("Flip Vertically  F", Command::Transform(Operation::Flip)),
+                    ("Reset View", Command::Reset),
                 ] {
                     menu_command(ui, label, action, command);
                 }
@@ -319,6 +414,23 @@ impl eframe::App for Viewer {
             self.admit(loader.take_completion());
         }
         self.update_title(ctx);
+        if let Some(child) = &mut self.reveal_child {
+            match child.try_wait() {
+                Ok(Some(status)) => {
+                    if !status.success() {
+                        self.action_error = Some(format!(
+                            "Reveal failed ({status}); check the file and system file manager."
+                        ));
+                    }
+                    self.reveal_child = None;
+                }
+                Ok(None) => ctx.request_repaint_after(std::time::Duration::from_millis(100)),
+                Err(error) => {
+                    self.action_error = Some(format!("Could not check Reveal result: {error}"));
+                    self.reveal_child = None;
+                }
+            }
+        }
     }
 
     fn ui(&mut self, ui: &mut egui::Ui, frame: &mut eframe::Frame) {
@@ -335,7 +447,13 @@ impl eframe::App for Viewer {
             if ctx.input_mut(|input| input.consume_key(Modifiers::COMMAND, Key::O)) {
                 command = Some(Command::Open);
             }
+            if ctx.input_mut(|input| input.consume_key(Modifiers::SHIFT, Key::R)) {
+                command = Some(Command::Transform(Operation::Counterclockwise));
+            }
             for (key, action) in [
+                (Key::R, Command::Transform(Operation::Clockwise)),
+                (Key::M, Command::Transform(Operation::Mirror)),
+                (Key::F, Command::Transform(Operation::Flip)),
                 (Key::ArrowLeft, Command::Navigate(Direction::Previous)),
                 (Key::ArrowRight, Command::Navigate(Direction::Next)),
                 (Key::Home, Command::Navigate(Direction::First)),
@@ -361,6 +479,20 @@ impl eframe::App for Viewer {
         egui::Panel::top("menus").show(ui, |ui| {
             egui::MenuBar::new().ui(ui, |ui| self.menus(ui, &mut command));
         });
+        if let Some(error) = &self.action_error {
+            let dismiss = egui::Panel::top("action-error")
+                .show(ui, |ui| {
+                    ui.horizontal_wrapped(|ui| {
+                        ui.label(error);
+                        ui.button("Dismiss").clicked()
+                    })
+                    .inner
+                })
+                .inner;
+            if dismiss {
+                self.action_error = None;
+            }
+        }
         egui::CentralPanel::default()
             .frame(egui::Frame::central_panel(ui.style()).fill(Color32::from_gray(18)))
             .show(ui, |ui| {
@@ -370,11 +502,13 @@ impl eframe::App for Viewer {
                     self.menus(ui, &mut command);
                 });
                 if let Some(image) = &self.display.image {
-                    let size = image.size;
+                    let mut size = self.view.transform.size(image.size);
                     let ppp = ctx.pixels_per_point();
                     if let Some(action) = command {
                         match action {
                             Command::Fit => self.view.fit(),
+                            Command::Reset => self.view.reset(),
+                            Command::Transform(operation) => self.view.transform(operation),
                             Command::ActualSize => self.view.actual_size(),
                             Command::Zoom(factor) => {
                                 self.view.zoom(factor, canvas.center(), canvas, size, ppp)
@@ -382,6 +516,7 @@ impl eframe::App for Viewer {
                             _ => {}
                         }
                     }
+                    size = self.view.transform.size(image.size);
                     if shortcuts_enabled && !egui::Popup::is_any_open(&ctx) {
                         if response.dragged() {
                             self.view.pan(response.drag_delta(), canvas, size, ppp);
@@ -430,6 +565,7 @@ impl eframe::App for Viewer {
                             &state.device,
                             canvas,
                             self.view.rect(canvas, size, ppp),
+                            self.view.transform,
                         ));
                     }
                 } else {
@@ -463,6 +599,13 @@ impl eframe::App for Viewer {
                 self.sort = sort;
                 self.refresh(None);
             }
+            Some(
+                action
+                @ (Command::CopyImage | Command::CopyFile | Command::Paste | Command::Reveal),
+            ) => {
+                self.action_error = self.desktop_action(action).err();
+                ctx.request_repaint();
+            }
             _ => {}
         }
         self.update_title(&ctx);
@@ -479,7 +622,7 @@ mod tests {
         let canvas = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(400.0, 300.0));
         let mut view = View::default();
         let mut display = Display::new(Status::Empty);
-        assert!(display.finish(0, Ok("prior"), &mut view));
+        assert!(display.finish(0, Ok("prior"), None, &mut view));
         view.actual_size();
         view.pan(egui::vec2(37.0, 19.0), canvas, [1600, 800], 1.0);
         let prior_rect = view.rect(canvas, [1600, 800], 1.0);
@@ -489,7 +632,7 @@ mod tests {
         assert_eq!(view.rect(canvas, [1600, 800], 1.0), prior_rect);
         assert!(matches!(display.status, Status::Loading));
 
-        assert!(display.finish(1, Ok("next uploaded resident"), &mut view));
+        assert!(display.finish(1, Ok("next uploaded resident"), None, &mut view));
         assert_eq!(display.image, Some("next uploaded resident"));
         assert!(matches!(display.status, Status::Ready));
         assert_eq!(
@@ -510,16 +653,17 @@ mod tests {
             image: Some(Arc::clone(&prior)),
             status: Status::Loading,
             generation: 3,
+            path: None,
         };
-        assert!(!display.finish(2, Ok(superseded), &mut view));
+        assert!(!display.finish(2, Ok(superseded), None, &mut view));
         assert!(weak.upgrade().is_none());
         assert!(Arc::ptr_eq(display.image.as_ref().unwrap(), &prior));
         assert!(matches!(display.status, Status::Loading));
         let canvas = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(100.0, 100.0));
         assert_eq!(view.scale(canvas, [1000, 1000], 1.0), 1.0);
-        assert!(!display.finish(2, Err("stale failure".into()), &mut view));
+        assert!(!display.finish(2, Err("stale failure".into()), None, &mut view));
         assert!(matches!(display.status, Status::Loading));
-        assert!(display.finish(3, Ok(Arc::new("latest")), &mut view));
+        assert!(display.finish(3, Ok(Arc::new("latest")), None, &mut view));
         assert_eq!(**display.image.as_ref().unwrap(), "latest");
     }
 
@@ -527,12 +671,12 @@ mod tests {
     fn decode_or_upload_error_retains_prior_and_allows_next_swap() {
         let mut view = View::default();
         let mut display = Display::new(Status::Empty);
-        assert!(display.finish(0, Ok("prior"), &mut view));
+        assert!(display.finish(0, Ok("prior"), None, &mut view));
         for error in ["decode failed", "GPU upload failed"] {
             view.actual_size();
             display.generation += 1;
             display.loading();
-            assert!(!display.finish(display.generation, Err(error.into()), &mut view));
+            assert!(!display.finish(display.generation, Err(error.into()), None, &mut view));
             assert_eq!(display.image, Some("prior"));
             assert!(matches!(&display.status, Status::Error(message) if message == error));
             let canvas = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(100.0, 100.0));
@@ -540,8 +684,55 @@ mod tests {
         }
         display.generation += 1;
         display.loading();
-        assert!(display.finish(display.generation, Ok("recovered"), &mut view));
+        assert!(display.finish(display.generation, Ok("recovered"), None, &mut view));
         assert_eq!(display.image, Some("recovered"));
+    }
+
+    #[test]
+    fn transformed_resident_persists_until_different_file_swap() {
+        let mut display = Display::new(Status::Empty);
+        let mut view = View::default();
+        let first = Some(PathBuf::from("/tmp/first.png"));
+        let second = Some(PathBuf::from("/tmp/second.png"));
+        assert!(display.finish(0, Ok("first pixels"), first.clone(), &mut view));
+        view.transform(Operation::Clockwise);
+        view.actual_size();
+        display.generation = 1;
+        display.loading();
+        view.transform(Operation::Mirror);
+        let transform = view.transform;
+        assert_eq!(display.path, first);
+        assert_eq!(display.image, Some("first pixels"));
+        assert!(!display.finish(0, Ok("stale pixels"), second.clone(), &mut view));
+        assert_eq!(view.transform, transform);
+        assert!(!display.finish(1, Err("load failed".into()), second.clone(), &mut view));
+        assert_eq!(view.transform, transform);
+        assert_eq!(display.path, first);
+        display.generation = 2;
+        assert!(display.finish(2, Ok("second pixels"), second.clone(), &mut view));
+        assert_eq!(display.path, second);
+        assert_eq!(view.transform, crate::transform::Transform::default());
+        let canvas = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(400.0, 300.0));
+        assert_eq!(view.scale(canvas, [1600, 800], 1.0), 0.25);
+    }
+
+    #[test]
+    fn same_file_reload_preserves_transforms_zoom_and_pan() {
+        let mut display = Display::new(Status::Empty);
+        let mut view = View::default();
+        let path = Some(PathBuf::from("/tmp/same.png"));
+        assert!(display.finish(0, Ok("prior pixels"), path.clone(), &mut view));
+        view.transform(Operation::Flip);
+        view.actual_size();
+        let canvas = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(400.0, 300.0));
+        view.pan(egui::vec2(37.0, 19.0), canvas, [1600, 800], 1.0);
+        let prior_rect = view.rect(canvas, [1600, 800], 1.0);
+        let transform = view.transform;
+        display.generation = 1;
+        display.loading();
+        assert!(display.finish(1, Ok("refreshed pixels"), path, &mut view));
+        assert_eq!(view.transform, transform);
+        assert_eq!(view.rect(canvas, [1600, 800], 1.0), prior_rect);
     }
 
     #[test]
@@ -552,7 +743,7 @@ mod tests {
         display.fail("missing file".into());
         assert!(display.image.is_none());
         let mut view = View::default();
-        assert!(display.finish(0, Ok("image"), &mut view));
+        assert!(display.finish(0, Ok("image"), None, &mut view));
         display.clear();
         assert!(display.image.is_none());
         assert!(matches!(display.status, Status::Empty));
@@ -575,6 +766,9 @@ mod tests {
             sort: Sort::default(),
             view: View::default(),
             render_state: None,
+            clipboard: None,
+            action_error: None,
+            reveal_child: None,
         };
         viewer.admit(Completion {
             generation: 2,

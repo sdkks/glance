@@ -1,3 +1,4 @@
+use crate::transform::{Operation, Transform};
 use eframe::egui::{Pos2, Rect, Vec2};
 
 pub const MIN_SCALE: f32 = 0.01;
@@ -8,11 +9,21 @@ pub struct View {
     // None follows fit dynamically on viewport/DPI changes; Some is physical pixel scale.
     scale: Option<f32>,
     pan: Vec2,
+    pub transform: Transform,
 }
 
 impl View {
     pub fn fit(&mut self) {
+        self.scale = None;
+        self.pan = Vec2::ZERO;
+    }
+
+    pub fn reset(&mut self) {
         *self = Self::default();
+    }
+
+    pub fn transform(&mut self, operation: Operation) {
+        self.transform.apply(operation);
     }
 
     pub fn actual_size(&mut self) {
@@ -68,6 +79,41 @@ mod tests {
     use super::*;
     fn canvas() -> Rect {
         Rect::from_min_size(Pos2::new(10.0, 20.0), Vec2::new(400.0, 300.0))
+    }
+
+    #[test]
+    fn fit_preserves_orientation_reset_restores_base_and_framing() {
+        let mut view = View::default();
+        view.transform(Operation::Clockwise);
+        view.actual_size();
+        view.pan(Vec2::new(20.0, 30.0), canvas(), [1600, 800], 1.0);
+        let orientation = view.transform;
+        view.fit();
+        assert_eq!(view.transform, orientation);
+        assert_eq!(view.pan, Vec2::ZERO);
+        view.actual_size();
+        view.reset();
+        assert_eq!(view.transform, Transform::default());
+        assert_eq!(view.scale, None);
+        assert_eq!(view.pan, Vec2::ZERO);
+    }
+
+    #[test]
+    fn transform_preserves_zoom_pan_and_transformed_pointer_anchor() {
+        let mut view = View::default();
+        view.actual_size();
+        view.pan(Vec2::new(20.0, 30.0), canvas(), [1600, 800], 1.0);
+        view.transform(Operation::Clockwise);
+        let size = view.transform.size([1600, 800]);
+        assert_eq!(size, [800, 1600]);
+        assert_eq!(view.scale(canvas(), size, 1.0), 1.0);
+        assert_eq!(view.pan, Vec2::new(20.0, 30.0));
+        let pointer = canvas().center() + Vec2::new(13.0, 27.0);
+        let before = view.rect(canvas(), size, 1.0);
+        let uv = (pointer - before.min) / before.size();
+        view.zoom(2.0, pointer, canvas(), size, 1.0);
+        let after = view.rect(canvas(), size, 1.0);
+        assert!(((pointer - after.min) / after.size() - uv).length() < 0.0001);
     }
 
     #[test]
