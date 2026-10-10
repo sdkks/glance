@@ -72,6 +72,33 @@ fix, stash, stage, clean, or overwrite hooks. Cargo will create normal ignored
 build artifacts. Tests create original fixtures in uniquely named temporary
 folders, not from legacy assets.
 
+### Opt-in dependency audits
+
+Install the tested developer-tool versions explicitly (never installed by make):
+
+```sh
+cargo install cargo-deny --version 0.20.2 --locked
+cargo install cargo-machete --version 0.9.2 --locked
+make audit
+make machete
+```
+
+`audit` runs `cargo deny --locked check` across the resolved graph, including
+platform-specific crates: license policy in `deny.toml`, security advisories and
+yanked releases (no ignores), duplicate-version warnings, wildcard bans, and
+crates.io-only sources. LLVM license riders are allowed only for the listed
+crate versions; permissive OR alternatives do not authorize copyleft licenses.
+The allowlist includes bundled font licenses; distribution still needs the
+notices described in `THIRD_PARTY.md`.
+
+`machete` runs `cargo machete` to detect unused direct dependencies. Both targets
+are non-mutating with respect to tracked files and fail clearly if the tool is
+missing. Cargo and cargo-deny may populate local caches or fetch advisory data;
+audit results depend on the current advisory database and registry state.
+They are intentionally outside `verify` and the pre-commit hook: these opt-in,
+CI-tier dependency checks require extra tools and advisory/network access, while
+`verify` remains fmt-check → check → clippy → test.
+
 ### Opt-in pre-commit hook
 
 From the repository root:

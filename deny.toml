@@ -1,0 +1,60 @@
+# Check all resolved platforms; do not filter out target-specific dependencies.
+[advisories]
+yanked = "deny"
+ignore = []
+
+[licenses]
+allow = [
+    "MIT",
+    "Apache-2.0",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "ISC",
+    "Unicode-3.0",
+    "Zlib",
+    "0BSD",
+    "BSL-1.0",
+    "Unlicense",
+    "Ubuntu-font-1.0",
+    "OFL-1.1",
+]
+# self_cell's Apache-2.0 OR GPL-2.0-only selects the allowed Apache alternative.
+# r-efi likewise has MIT/Apache alternatives to LGPL; no copyleft is allowed.
+# winit is Apache-2.0. Bundled fonts require both OFL and Ubuntu font licenses.
+
+# LLVM riders are scoped to the exact currently resolved crate versions,
+# never allowed globally (and no unrelated package exceptions are imported).
+[[licenses.exceptions]]
+crate = "rustix@0.38.44"
+allow = ["Apache-2.0 WITH LLVM-exception"]
+
+[[licenses.exceptions]]
+crate = "rustix@1.1.5"
+allow = ["Apache-2.0 WITH LLVM-exception"]
+
+[[licenses.exceptions]]
+crate = "linux-raw-sys@0.4.15"
+allow = ["Apache-2.0 WITH LLVM-exception"]
+
+[[licenses.exceptions]]
+crate = "linux-raw-sys@0.12.1"
+allow = ["Apache-2.0 WITH LLVM-exception"]
+
+[[licenses.exceptions]]
+crate = "wasip2@1.0.4+wasi-0.2.12"
+allow = ["Apache-2.0 WITH LLVM-exception"]
+
+[[licenses.exceptions]]
+crate = "wit-bindgen@0.57.1"
+allow = ["Apache-2.0 WITH LLVM-exception"]
+
+[bans]
+# The current transitive graph has duplicates; report without blocking.
+multiple-versions = "warn"
+wildcards = "deny"
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]
+allow-git = []
