@@ -1033,6 +1033,16 @@ impl Viewer {
     }
 }
 
+// Run after constructing menus so focus acquired this frame also suppresses close.
+fn close_shortcut(ctx: &egui::Context) {
+    if shortcuts_enabled(ctx)
+        && ctx.input_mut(|input| input.consume_key(Modifiers::COMMAND, Key::W))
+    {
+        // eframe turns this into the same Close viewport event as the OS close button.
+        ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+    }
+}
+
 fn keyboard_command(ctx: &egui::Context) -> Option<Command> {
     let mut command = None;
     if ctx.input_mut(|input| input.consume_key(Modifiers::COMMAND, Key::O)) {
@@ -1343,6 +1353,7 @@ impl eframe::App for Viewer {
                     });
                 }
             });
+        close_shortcut(&ctx);
         match command {
             Some(Command::Depth(depth)) => {
                 if self.settings.preload_depth == depth {
@@ -1870,6 +1881,166 @@ mod tests {
                 );
                 output.textures_delta.clear();
             }
+        }
+    }
+
+    fn modified_key(key: Key, modifiers: Modifiers) -> egui::Event {
+        egui::Event::Key {
+            key,
+            physical_key: None,
+            pressed: true,
+            repeat: false,
+            modifiers,
+        }
+    }
+
+    #[test]
+    fn close_shortcut_requests_root_viewport_close_for_both_platforms() {
+        for modifiers in [
+            Modifiers::MAC_CMD | Modifiers::COMMAND,
+            Modifiers::CTRL | Modifiers::COMMAND,
+        ] {
+            let ctx = egui::Context::default();
+            let mut output = ctx.run_ui(
+                egui::RawInput {
+                    events: vec![modified_key(Key::W, modifiers)],
+                    ..Default::default()
+                },
+                |ui| {
+                    close_shortcut(ui.ctx());
+                    assert!(!ui.ctx().input(|i| i.key_pressed(Key::W)));
+                },
+            );
+            output.textures_delta.clear();
+            assert!(
+                output.viewport_output[&egui::ViewportId::ROOT]
+                    .commands
+                    .contains(&egui::ViewportCommand::Close)
+            );
+        }
+    }
+
+    #[test]
+    fn close_shortcut_is_not_consumed_when_menu_text_or_dialog_owns_input() {
+        for guard in 0..3 {
+            let ctx = egui::Context::default();
+            let mut output = ctx.run_ui(
+                egui::RawInput {
+                    // The synchronous native dialog owns the window's focus;
+                    // Viewer::ui does not run while pick_file is active.
+                    focused: guard != 2,
+                    events: vec![modified_key(Key::W, Modifiers::COMMAND)],
+                    ..Default::default()
+                },
+                |ui| {
+                    match guard {
+                        0 => egui::Popup::open_id(ui.ctx(), egui::Id::new("menu")),
+                        1 => ui
+                            .ctx()
+                            .memory_mut(|m| m.request_focus(egui::Id::new("text"))),
+                        _ => {}
+                    }
+                    close_shortcut(ui.ctx());
+                    assert!(ui.ctx().input(|i| i.key_pressed(Key::W)));
+                },
+            );
+            output.textures_delta.clear();
+            assert!(
+                !output.viewport_output[&egui::ViewportId::ROOT]
+                    .commands
+                    .contains(&egui::ViewportCommand::Close)
+            );
+        }
+    }
+
+    #[test]
+    fn close_shortcut_leaves_existing_bindings_and_unrelated_keys_alone() {
+        let cases = [
+            (Key::O, Modifiers::COMMAND, Some(Command::Open)),
+            (Key::Num0, Modifiers::NONE, Some(Command::Fit)),
+            (Key::Num1, Modifiers::NONE, Some(Command::Fit)),
+            (Key::Num2, Modifiers::NONE, Some(Command::ActualSize)),
+            (Key::Plus, Modifiers::SHIFT, Some(Command::Zoom(1.25))),
+            (Key::Minus, Modifiers::NONE, Some(Command::Zoom(0.8))),
+            (
+                Key::R,
+                Modifiers::NONE,
+                Some(Command::Transform(Operation::Clockwise)),
+            ),
+            (
+                Key::R,
+                Modifiers::SHIFT,
+                Some(Command::Transform(Operation::Counterclockwise)),
+            ),
+            (
+                Key::M,
+                Modifiers::NONE,
+                Some(Command::Transform(Operation::Mirror)),
+            ),
+            (
+                Key::F,
+                Modifiers::NONE,
+                Some(Command::Transform(Operation::Flip)),
+            ),
+            (
+                Key::ArrowLeft,
+                Modifiers::NONE,
+                Some(Command::Navigate(Direction::Previous)),
+            ),
+            (
+                Key::ArrowRight,
+                Modifiers::NONE,
+                Some(Command::Navigate(Direction::Next)),
+            ),
+            (
+                Key::Home,
+                Modifiers::NONE,
+                Some(Command::Navigate(Direction::First)),
+            ),
+            (
+                Key::End,
+                Modifiers::NONE,
+                Some(Command::Navigate(Direction::Last)),
+            ),
+            (Key::Space, Modifiers::NONE, None),
+            (Key::W, Modifiers::NONE, None),
+            (Key::W, Modifiers::ALT, None),
+        ];
+        for (key, modifiers, expected) in cases {
+            let ctx = egui::Context::default();
+            let mut output = ctx.run_ui(
+                egui::RawInput {
+                    events: vec![modified_key(key, modifiers)],
+                    ..Default::default()
+                },
+                |ui| {
+                    close_shortcut(ui.ctx());
+                    let actual = keyboard_command(ui.ctx());
+                    match (actual, expected) {
+                        (None, None)
+                        | (Some(Command::Open), Some(Command::Open))
+                        | (Some(Command::Fit), Some(Command::Fit))
+                        | (Some(Command::ActualSize), Some(Command::ActualSize)) => {}
+                        (Some(Command::Zoom(a)), Some(Command::Zoom(b))) => assert_eq!(a, b),
+                        (Some(Command::Transform(a)), Some(Command::Transform(b))) => {
+                            assert_eq!(format!("{a:?}"), format!("{b:?}"));
+                        }
+                        (Some(Command::Navigate(a)), Some(Command::Navigate(b))) => {
+                            assert_eq!(std::mem::discriminant(&a), std::mem::discriminant(&b));
+                        }
+                        _ => panic!("shortcut changed for {key:?}"),
+                    }
+                    if expected.is_none() {
+                        assert!(ui.ctx().input(|i| i.key_pressed(key)));
+                    }
+                },
+            );
+            output.textures_delta.clear();
+            assert!(
+                !output.viewport_output[&egui::ViewportId::ROOT]
+                    .commands
+                    .contains(&egui::ViewportCommand::Close)
+            );
         }
     }
 
