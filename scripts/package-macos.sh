@@ -1,5 +1,5 @@
 #!/bin/sh
-# Unsigned, host-architecture macOS artifacts. No tools/dependencies are installed.
+# Ad-hoc signed, host-architecture macOS artifacts. No tools/dependencies are installed.
 set -eu
 cd "$(dirname "$0")/.."
 [ "$(uname -s)" = Darwin ] || { echo 'macOS packaging requires macOS.' >&2; exit 1; }
@@ -26,7 +26,8 @@ mkdir -p "$app/Contents/MacOS" "$app/Contents/Resources"
 cp "target/$target/release/glance" "$app/Contents/MacOS/glance"
 cp resources/glance.icns "$app/Contents/Resources/glance.icns"
 # Optional native packaging seam: flat, already-relocatable dylibs. Never alter
-# Mach-O signatures/install names here; the native producer owns those inputs.
+# install names here; the native producer owns those inputs. Copied binaries
+# receive ad-hoc signatures below, before signing the enclosing bundle.
 if [ -d bundle-libs ]; then
     mkdir -p "$app/Contents/Frameworks"
     for lib in bundle-libs/*.dylib; do
@@ -90,6 +91,27 @@ for type in $types; do
 done
 printf '</array></dict></plist>\n' >> "$plist"
 plutil -lint "$plist"
+# Sign inside out, after all bundle contents are final and before archiving.
+sign_bundle() {
+    command -v codesign >/dev/null 2>&1 || {
+        echo 'codesign is required to sign macOS artifacts.' >&2; return 1;
+    }
+    for lib in "$app"/Contents/Frameworks/*.dylib; do
+        [ -f "$lib" ] || continue
+        codesign --force --sign - "$lib" || return 1
+    done
+    codesign --force --deep --sign - "$app" &&
+        codesign --verify --deep --strict --verbose=2 "$app" &&
+        codesign -dv "$app"
+}
+if ! sign_bundle; then
+    if [ "${ALLOW_UNSIGNED:-0}" = 1 ]; then
+        echo 'WARNING: signing failed; ALLOW_UNSIGNED=1 permits artifacts without a verified signature.' >&2
+    else
+        echo 'macOS signing failed; refusing to ship artifacts without a verified signature (override: ALLOW_UNSIGNED=1).' >&2
+        exit 1
+    fi
+fi
 ln -s /Applications "$stage/Applications"
 name="Glance-$version-$arch"
 ditto -c -k --sequesterRsrc --keepParent "$app" "$stage/$name.zip"

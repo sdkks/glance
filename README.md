@@ -715,7 +715,7 @@ make macos-smoke IMAGE="$PWD/assets/icons/glance.iconset/icon_256x256.png"
 ```
 
 Requires macOS, the pinned Rust toolchain and Apple's `ditto`, `hdiutil`,
-`otool` and `plutil` (no additional runtime dependencies). Outputs live in
+`otool`, `plutil` and `codesign` (no additional runtime dependencies). Outputs live in
 `target/macos-artifacts/`: `Glance.app`, `Glance-<version>-<arch>.zip`,
 `Glance-<version>-<arch>.dmg` and `Glance-<version>-<arch>.sha256`.
 Version comes from `[package].version` in `Cargo.toml`; architecture is the
@@ -744,26 +744,39 @@ The script copies them into `Contents/Frameworks` and links the binary with
 matching build/pkg-config inputs with `@rpath/<basename>` install names;
 transitive libraries must likewise use `@rpath` or `@loader_path` and all be
 present. Packaging validates these dependencies and fails on absolute external
-paths when `bundle-libs/` exists. It does not rewrite Mach-O files or invalidate
-the linker-generated ad-hoc signatures on Apple Silicon. If the directory is
+paths when `bundle-libs/` exists. It does not rewrite Mach-O install names;
+copied dylibs are ad-hoc signed before the enclosing bundle. If the directory is
 absent, copying is a no-op and external development libraries produce warnings:
 **such artifacts require those libraries and are not self-contained releases**.
 Decoder-only AVIF provisioning and native license notices remain separate work;
 Homebrew libavif is a development dependency, not a shipping native build.
 
-These builds are **unsigned and not notarized** (no developer certificate
-signing). Gatekeeper may block a downloaded app: right-click → Open, then
-confirm Open. If necessary, after verifying the source and checksum, remove
-only this app's quarantine attribute:
+These builds are **ad-hoc signed, but not Developer ID signed or notarized**.
+Packaging signs the completed bundle before archiving and verifies its signature;
+`ditto` preserves that signature in the zip. Missing `codesign` or signing failure
+stops packaging unless you explicitly set `ALLOW_UNSIGNED=1`, which prints a
+warning and permits artifacts without a verified signature. The smoke check still
+requires valid signatures.
+
+To install, extract the zip or mount the DMG, then drag `Glance.app` to
+`/Applications` (or copy it there). Gatekeeper will still warn on first launch of
+a downloaded app: right-click `Glance.app` → Open, then click Open again. As an
+alternative, after verifying the source and checksum, remove only this app's
+quarantine attribute, then launch it normally:
 
 ```sh
 xattr -d com.apple.quarantine /Applications/Glance.app
 ```
 
+These first-launch steps are needed only because the build lacks a Developer ID
+signature and notarization; an ad-hoc signature checks bundle integrity but does
+not establish a verified developer identity.
+
 The smoke command checks checksums, plist syntax, version/icon/executable keys
-and all Viewer/Alternate ranks, extracts the zip and compares its main bundle
-files, then launches the zip and direct bundled binaries with the image. It
-mounts the DMG read-only in a unique temporary mountpoint,
+and all Viewer/Alternate ranks, verifies the direct app's signature, extracts the
+zip, verifies its preserved signature and compares its main bundle files, then
+launches the zip and direct bundled binaries with the image. It
+mounts the DMG read-only in a unique temporary mountpoint, verifies its app's signature,
 checks the Applications link, launches its binary and requires the existing
 `Displayed` diagnostic within 30 seconds, then terminates only those processes
 and unmounts/removes the mountpoint. Complete logs remain in the printed temporary

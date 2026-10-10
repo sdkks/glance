@@ -36,6 +36,8 @@ launch() {
     return 1
 }
 (cd "$out" && shasum -a 256 -c "$name.sha256")
+codesign --verify --deep --strict --verbose=2 "$out/Glance.app"
+codesign -dv "$out/Glance.app"
 plist="$out/Glance.app/Contents/Info.plist"
 plutil -lint "$plist"
 [ "$(plutil -extract CFBundleShortVersionString raw "$plist")" = "$version" ]
@@ -51,6 +53,8 @@ while [ "$index" -lt 23 ]; do
     index=$((index + 1))
 done
 ditto -x -k "$out/$name.zip" "$work/zip"
+codesign --verify --deep --strict --verbose=2 "$work/zip/Glance.app"
+codesign -dv "$work/zip/Glance.app"
 for file in MacOS/glance Resources/glance.icns Info.plist; do
     cmp "$out/Glance.app/Contents/$file" "$work/zip/Glance.app/Contents/$file"
 done
@@ -59,6 +63,8 @@ launch "$out/Glance.app/Contents/MacOS/glance" direct
 mkdir "$work/mount"
 hdiutil attach -readonly -nobrowse -mountpoint "$work/mount" "$out/$name.dmg" > "$work/mount.log"
 mounted=yes
+codesign --verify --deep --strict --verbose=2 "$work/mount/Glance.app"
+codesign -dv "$work/mount/Glance.app"
 [ "$(readlink "$work/mount/Applications")" = /Applications ]
 launch "$work/mount/Glance.app/Contents/MacOS/glance" dmg
 hdiutil detach "$work/mount" > "$work/unmount.log"
