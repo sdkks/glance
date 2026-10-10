@@ -16,8 +16,11 @@ pub fn local_path(path: &Path) -> Option<PathBuf> {
 
 pub fn parse_reference(reference: &str) -> Option<PathBuf> {
     let path = if let Some(url) = reference.strip_prefix("file://") {
-        let url = url.strip_prefix("localhost").unwrap_or(url);
-        if !url.starts_with('/') || url.contains(['?', '#', '\r', '\n']) {
+        let (authority, url) = url.split_at(url.find('/')?);
+        if authority.contains('%') || !matches!(authority, "" | "localhost") {
+            return None;
+        }
+        if url.contains(['?', '#', '\r', '\n']) {
             return None;
         }
         let mut decoded = Vec::new();
@@ -172,6 +175,24 @@ mod tests {
             "file:///tmp/%",
             "file:///tmp/a.png?query",
             "file:///tmp/a.png#fragment",
+        ] {
+            assert_eq!(parse_reference(input), None, "{input}");
+        }
+    }
+    #[test]
+    fn file_url_authority_is_exact_and_not_percent_decoded() {
+        assert_eq!(
+            parse_reference("file://localhost/tmp/x.png"),
+            Some(PathBuf::from("/tmp/x.png"))
+        );
+        for input in [
+            "file://localhost.evil/tmp/x.png",
+            "file://localhost@evil/tmp/x.png",
+            "file://localhost:8080/tmp/x.png",
+            "file://%6Cocalhost/tmp/x.png",
+            "file://local%68ost/tmp/x.png",
+            "file://user@localhost/tmp/x.png",
+            "file://localhost",
         ] {
             assert_eq!(parse_reference(input), None, "{input}");
         }
