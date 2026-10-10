@@ -26,6 +26,8 @@ https://github.com/emilk/egui/tree/0.36.2/crates/epaint_default_fonts/fonts
 
 ## Resolved crate manifests
 
+See `deny.toml` for the machine-checkable license policy (`make audit`).
+
 Generated from `cargo metadata --locked --format-version 1` after resolving this
 increment's manifest. Package source URLs below identify exact registry versions.
 
