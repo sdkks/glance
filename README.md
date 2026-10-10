@@ -49,13 +49,14 @@ Settled images have no application repaint timer.
 ## Current limits and remaining work
 
 Input reads are bounded at 64 MiB. Decoder output and RGBA8 output are each bounded
-at 128 MiB; sides are limited to the smaller of 8192 pixels and the device's
+at 512 MiB; sides are limited to the smaller of 16384 pixels and the device's
 texture limit. `image::Limits` explicitly bounds dimensions and requests a
-128 MiB decoder allocation cap; the allocation cap is best-effort upstream,
+512 MiB decoder allocation cap; the allocation cap is best-effort upstream,
 not a total process-RSS guarantee. Input, decode/conversion, UI texture staging,
 and GPU/native allocations may coexist. One worker and bounded pending/result
-slots prevent growth per keypress. These are interim limits, not the future
-full-detail large-image envelope.
+slots prevent growth per keypress. These interim calibration values were raised
+after real 38MP content was rejected; the full-detail presentation envelope
+(including tiling and high-depth support) remains future work.
 
 Embedded orientation is applied once. Presentation currently uses an image-only
 wgpu paint callback with an sRGB RGBA8 texture and linear sampling. Transparency
