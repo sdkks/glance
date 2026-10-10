@@ -15,6 +15,7 @@ pub enum Format {
     Xpm,
     Pcx,
     Sgi,
+    Jxl,
 }
 
 pub fn format(path: &Path) -> Option<Format> {
@@ -35,6 +36,7 @@ pub fn format(path: &Path) -> Option<Format> {
         b"xbm" => Format::Xbm,
         b"xpm" => Format::Xpm,
         b"pcx" => Format::Pcx,
+        b"jxl" => Format::Jxl,
         b"sgi" | b"bw" | b"rgb" | b"rgba" => Format::Sgi,
         _ => return None,
     })
@@ -61,6 +63,11 @@ pub fn decoder(
         Format::Xbm => Box::new(image_extras::xbm::XbmDecoder::new(cursor)?),
         Format::Xpm => Box::new(image_extras::xpm::XpmDecoder::new(cursor)?),
         Format::Pcx => Box::new(image_extras::pcx::PCXDecoder::new(cursor)?),
+        Format::Jxl => {
+            return Err(LoadError::UnsupportedVariant(
+                "JXL: use core decoder".into(),
+            ));
+        }
         Format::Sgi => Box::new(image_extras::sgi::SgiDecoder::new(cursor)?),
     };
     decoder.set_limits(limits)?;

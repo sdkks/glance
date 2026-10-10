@@ -169,9 +169,8 @@ synchronous decoder work may finish, but cannot publish into a replaced playback
 Prefetch keeps only the first composed frame; history never retains played frames
 or running decoders. Changing preload depth or sort does not start neighbor playback.
 
-AVIF and JXL sequences are explicitly deferred until their static codecs exist.
-Their sequence timing adapters will follow those codecs; neither sequence playback
-nor static support for those formats is claimed here. 16-bit APNG playback is not
+AVIF and JXL sequences remain deferred; JPEG XL still support is described below.
+No AVIF static support is claimed in this increment. 16-bit APNG playback is not
 supported; static 16-bit PNG is unchanged. Visual playback and pause/step feel still
 require a human desktop check. For release smoke diagnostics, set
 `GLANCE_TRACE_ANIMATION=1` to log each fully admitted animation frame to stderr;
@@ -324,6 +323,20 @@ construction, metadata and pixel decode and returns a named malformed-image erro
 The default panic hook may still print a diagnostic. This boundary does not catch
 allocator aborts, process aborts or memory-safety failures. Encoded reads and output
 sizes remain bounded; upstream scratch-allocation limits remain best-effort.
+
+## Web and vector formats
+
+JPEG XL (`jxl`) stills use pinned `jxl-oxide` 0.12.6's core API (not its image
+adapter), with moxcms enabled and no native JXL runtime. The codec converts to
+encoded sRGB with relative-colorimetric intent and applies stream orientation
+once; Glance does not rotate it again or reapply the original ICC. Output is
+quantized to full-range U16 even for 8-bit sources, then uses the existing U16
+levels, tiles and 8-bit clipboard conversion. This is not lossless preservation
+of arbitrary float/greater-than-16-bit source samples. HDR transfer, CMYK and
+animation/sequence profiles give named unsupported-variant errors. Decoder
+tracked allocations are capped at 512 MiB; upstream untracked scratch is not
+an RSS guarantee. The original test fixture is a constant 3×2 PPM encoded
+losslessly by cjxl 0.10.2; no borrowed image assets are used.
 
 ## Current limits and remaining work
 

@@ -389,3 +389,26 @@ increment's manifest. Package source URLs below identify exact registry versions
 | zlib-rs | 0.6.8 | Zlib | https://crates.io/crates/zlib-rs/0.6.8 |
 | zune-core | 0.5.3 | MIT OR Apache-2.0 OR Zlib | https://crates.io/crates/zune-core/0.5.3 |
 | zune-jpeg | 0.5.15 | MIT OR Apache-2.0 OR Zlib | https://crates.io/crates/zune-jpeg/0.5.15 |
+
+## JPEG XL still decoder additions
+
+Core jxl-oxide 0.12.6, default features disabled, moxcms enabled (no image adapter, no native JXL runtime). These new manifest declarations all offer a permissive license; preserve MIT/Apache notices as selected. No policy exceptions added. Original fixture assets/test/web/still.jxl was generated from the adjacent independently authored PPM with cjxl 0.10.2, lossless distance 0.
+
+| Crate | Version | Declared license | Source |
+| --- | --- | --- | --- |
+| alloc-no-stdlib | 2.0.4 | BSD-3-Clause | https://crates.io/crates/alloc-no-stdlib/2.0.4 |
+| alloc-stdlib | 0.2.4 | BSD-3-Clause | https://crates.io/crates/alloc-stdlib/0.2.4 |
+| brotli-decompressor | 5.0.3 | BSD-3-Clause/MIT | https://crates.io/crates/brotli-decompressor/5.0.3 |
+| jxl-bitstream | 1.1.0 | MIT OR Apache-2.0 | https://crates.io/crates/jxl-bitstream/1.1.0 |
+| jxl-coding | 1.0.1 | MIT OR Apache-2.0 | https://crates.io/crates/jxl-coding/1.0.1 |
+| jxl-color | 0.11.0 | MIT OR Apache-2.0 | https://crates.io/crates/jxl-color/0.11.0 |
+| jxl-frame | 0.13.3 | MIT OR Apache-2.0 | https://crates.io/crates/jxl-frame/0.13.3 |
+| jxl-grid | 0.6.2 | MIT OR Apache-2.0 | https://crates.io/crates/jxl-grid/0.6.2 |
+| jxl-image | 0.13.0 | MIT OR Apache-2.0 | https://crates.io/crates/jxl-image/0.13.0 |
+| jxl-jbr | 0.2.1 | MIT OR Apache-2.0 | https://crates.io/crates/jxl-jbr/0.2.1 |
+| jxl-modular | 0.11.3 | MIT OR Apache-2.0 | https://crates.io/crates/jxl-modular/0.11.3 |
+| jxl-oxide | 0.12.6 | MIT OR Apache-2.0 | https://crates.io/crates/jxl-oxide/0.12.6 |
+| jxl-oxide-common | 1.0.0 | MIT OR Apache-2.0 | https://crates.io/crates/jxl-oxide-common/1.0.0 |
+| jxl-render | 0.12.4 | MIT OR Apache-2.0 | https://crates.io/crates/jxl-render/0.12.4 |
+| jxl-threadpool | 1.0.0 | MIT OR Apache-2.0 | https://crates.io/crates/jxl-threadpool/1.0.0 |
+| jxl-vardct | 0.11.1 | MIT OR Apache-2.0 | https://crates.io/crates/jxl-vardct/0.11.1 |

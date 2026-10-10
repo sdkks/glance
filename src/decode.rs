@@ -115,6 +115,9 @@ pub(crate) fn read_encoded(path: &Path) -> Result<Vec<u8>, LoadError> {
 }
 
 fn decode_encoded(format: crate::formats::Format, encoded: Vec<u8>) -> Result<Pixels, LoadError> {
+    if matches!(format, crate::formats::Format::Jxl) {
+        return jxl::decode(&encoded);
+    }
     if let Some(frame) = crate::animation::first(format, &encoded)? {
         return Ok(frame);
     }
@@ -242,6 +245,8 @@ fn checked_size(width: u32, height: u32, dimension_limit: u32) -> Result<[usize;
         .map_err(|_| LoadError::ResourceLimit("height is not addressable".into()))?;
     Ok([width, height])
 }
+
+mod jxl;
 
 #[cfg(test)]
 mod format_tests;
