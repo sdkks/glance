@@ -2,7 +2,7 @@
 .PHONY: help fmt fmt-check check clippy test verify precommit build run
 
 help:
-	@printf '%s\n' 'Glance development commands:' '  fmt        Format Rust (modifies files)' '  fmt-check  Check formatting' '  check      Compile all targets without building executables' '  clippy     Lint all targets, warnings are errors' '  test       Run tests' '  verify     Sequential fmt-check, check, clippy, test' '  precommit  Staged whitespace, working-tree fmt-check and check' '  build      Build the release executable' '  run        Run the viewer (ARGS="path/to/image.png")'
+	@printf '%s\n' 'Glance development commands:' '  fmt        Format Rust (modifies files)' '  fmt-check  Check formatting' '  check      Compile all targets without building executables' '  clippy     Lint all targets, warnings are errors' '  test       Run tests' '  verify     Sequential fmt-check, check, clippy, test' '  precommit  Staged whitespace, working-tree fmt-check and check' '  build      Build the release executable' '  run        Run the viewer (ARGS="path/to/image.png")' '  audit      Check dependency licenses, advisories, bans, sources (non-mutating)' '  machete    Check for unused direct dependencies (non-mutating)'
 
 fmt:
 	cargo fmt --all
@@ -36,3 +36,13 @@ build:
 
 run:
 	cargo run --locked -- $(ARGS)
+
+# Opt-in audits do not modify tracked files or install developer tools.
+.PHONY: audit machete
+audit:
+	@cargo deny --version >/dev/null 2>&1 || { printf '%s\n' 'cargo-deny missing; see README installation commands.' >&2; exit 1; }
+	cargo deny --locked check
+
+machete:
+	@cargo machete --version >/dev/null 2>&1 || { printf '%s\n' 'cargo-machete missing; see README installation commands.' >&2; exit 1; }
+	cargo machete
