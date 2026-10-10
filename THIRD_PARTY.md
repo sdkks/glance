@@ -50,6 +50,31 @@ was not established. Clean aperture is resolved by libavif's validated crop API;
 pixel aspect is resampled to square pixels in the existing U16 normalization
 path. Decoder-only shipping-artifact and native-notice obligations are unchanged.
 
+## Document composite dependencies
+
+Direct `zip` 9.0.1 (MIT, Rust MSRV 1.88), defaults disabled, only `deflate`
+requested. Its feature closure enables `deflate-zopfli`,
+`deflate-flate2-zlib-rs`, `deflate-flate2`, `_deflate-any` and the already-resolved
+flate2 1.1.10 / zlib-rs 0.6.8. No bzip2, zstd, AES, time or chrono features.
+Direct `psd` 0.3.5 declares `MIT/Apache-2.0` (permissive OR), not MIT alone;
+both upstream license files are present. It has no feature declarations.
+The following new resolved manifests were inspected from Cargo's installed
+registry source. `make audit` passes without license policy changes.
+
+| Crate | Version | Declared license | Source |
+| --- | --- | --- | --- |
+| zip | 9.0.1 | MIT | https://crates.io/crates/zip/9.0.1 |
+| psd | 0.3.5 | MIT/Apache-2.0 | https://crates.io/crates/psd/0.3.5 |
+| nix | 0.31.3 | MIT | https://crates.io/crates/nix/0.31.3 |
+| typed-path | 0.12.3 | MIT OR Apache-2.0 | https://crates.io/crates/typed-path/0.12.3 |
+| zopfli | 0.8.3 | Apache-2.0 | https://crates.io/crates/zopfli/0.8.3 |
+
+Document test fixtures are independently authored in `src/decode/document/tests.rs`:
+analytic two-pixel RGBA PNGs, ZIP containers written in-test, and minimal PSD v1
+headers/planar raw, RLE and zlib composites. No external image assets, borrowed
+PSD files or upstream fixture corpus is redistributed. The PSD crate has no writer.
+The ignored smoke generator retains these originals in a unique temporary folder.
+
 ## Bundled fonts
 
 `epaint_default_fonts` 0.36.2 embeds Hack, Noto Emoji, Ubuntu Light, and emoji-icon-font.
