@@ -865,9 +865,9 @@ Pushing the reviewed branch and `vX.Y.Z` tag starts `.github/workflows/release.y
 `make verify`, `make audit`, and `make machete` before either packaging job
 starts. Both packages must succeed before the release is created/updated with
 `GITHUB_TOKEN`. Before any asset replacement, an existing public release is
-converted to a draft; a new release is created as a draft only after an explicit
-HTTP 404 confirms absence. Other lookup errors abort without creating a release
-or changing existing assets or visibility. Rerunning a tag
+converted to a draft; a new release is created as a draft only after a confirmed
+`release not found` result from the JSON-mode lookup. Other lookup errors abort
+without creating a release or changing existing assets or visibility. Rerunning a tag
 replaces assets with `--clobber`. The release becomes public only after all
 uploads succeed and their exact names and byte sizes match the candidate set
 (including rejection of extra assets). A failed upload or verification leaves
