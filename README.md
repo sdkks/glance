@@ -19,6 +19,15 @@ Folder browsing is nonrecursive and skips dot-prefixed/Finder-hidden names.
 Explicitly opened hidden or missing files remain selected on opening. Corrupt
 files stay in the list and show a named error; navigation and Open remain available.
 
+Close the viewer with **⌘W on macOS / Ctrl+W on Linux**, or the window's close
+button. Glance has one window, so closing it exits the app through the same
+normal shutdown path. The shortcut is suppressed (and not consumed) while a
+menu, popup, text control, or native file dialog owns input, or the viewer is
+unfocused. **⌘Q on macOS / Ctrl+Q on Linux** remains the pinned egui stack's
+built-in Quit shortcut (macOS also has its native application-menu Quit action).
+Glance does not add or override that binding; unlike the viewer's guarded close
+shortcut, the stack's Quit shortcut is global.
+
 Left/Right select previous/next; Home/End select first/last, without wrapping.
 The **Navigate → Sort** submenu offers natural Name A→Z/Z→A, Size largest/smallest
 first, and Modified newest/oldest first, indicating the active choice. Sort
