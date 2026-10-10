@@ -192,13 +192,23 @@ jobs:
         run: |
           set -euo pipefail
           was_public=false
-          if gh release view "$RELEASE_TAG" --json isDraft > release-state.json; then
-            is_draft=$(python3 -c 'import json; print(str(json.load(open("release-state.json"))["isDraft"]).lower())')
+          # Only an explicit HTTP 404 means absent; API/auth/network errors must
+          # abort before creating a release or mutating any existing assets.
+          if gh api "repos/{owner}/{repo}/releases/tags/$RELEASE_TAG" --include \
+              > release-state.http 2> release-lookup.err; then
+            is_draft=$(python3 -c 'import json; body=open("release-state.http").read().split("\n\n", 1)[1]; print(str(json.loads(body)["draft"]).lower())')
             if [[ "$is_draft" == false ]]; then
               was_public=true
               gh release edit "$RELEASE_TAG" --draft
             fi
           else
+            lookup_status=''
+            IFS= read -r lookup_status < release-state.http || true
+            if [[ ! "$lookup_status" =~ ^HTTP/[0-9.]+[[:space:]]404([[:space:]]|$) ]]; then
+              echo 'Release lookup failed; refusing to create or mutate a release.' >&2
+              cat release-lookup.err >&2
+              exit 1
+            fi
             gh release create "$RELEASE_TAG" --draft --verify-tag --title "Glance $RELEASE_TAG" \
               --notes 'Test-gated macOS and Linux artifacts with bundled decoder-only AVIF. macOS builds are ad-hoc signed, not Developer ID signed or notarized; see README for Gatekeeper instructions. EXR/HDR, PQ/HLG, XCF and AVIF/JXL sequences remain unsupported.'
           fi
