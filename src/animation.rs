@@ -10,10 +10,23 @@ use std::{
     time::Duration,
 };
 
+/// Default 50 fps ceiling; fractional delays above this floor remain intact.
+pub const MIN_FRAME_DELAY: Duration = Duration::from_millis(20);
+const SHORT_DELAY_THRESHOLD_MS: f64 = 10.0;
+const FALLBACK_FRAME_DELAY: Duration = Duration::from_millis(100);
+
 pub fn delay(value: Option<(u32, u32)>) -> Duration {
     match value {
-        None | Some((0, _)) | Some((_, 0)) => Duration::from_millis(100),
-        Some((n, d)) => Duration::from_secs_f64((f64::from(n) / f64::from(d) / 1000.0).max(0.01)),
+        None | Some((0, _)) | Some((_, 0)) => FALLBACK_FRAME_DELAY,
+        Some((n, d)) => {
+            let ms = f64::from(n) / f64::from(d);
+            // Browser-compatible: 0–1 centisecond delays use 100 ms, not a fast floor.
+            if ms <= SHORT_DELAY_THRESHOLD_MS {
+                FALLBACK_FRAME_DELAY
+            } else {
+                Duration::from_secs_f64(ms / 1000.0).max(MIN_FRAME_DELAY)
+            }
+        }
     }
 }
 
@@ -468,14 +481,23 @@ mod tests {
             (None, 100),
             (Some((0, 1)), 100),
             (Some((1, 0)), 100),
-            (Some((1, 100)), 10),
-            (Some((9, 1)), 10),
-            (Some((10, 1)), 10),
+            (Some((1, 100)), 100),
+            (Some((9, 1)), 100),
+            // GIF centiseconds: 0, 1, 2, 5, 10, 20 → 100, 100, 20, 50, 100, 200 ms.
+            (Some((10, 1)), 100),
+            (Some((20, 1)), 20),
+            (Some((50, 1)), 50),
+            (Some((100, 1)), 100),
+            (Some((200, 1)), 200),
             (Some((125, 1)), 125),
+            (Some((10000, 1000)), 100),
+            (Some((10001, 1000)), 20),
+            (Some((25, 2)), 20),
+            (Some((19999, 1000)), 20),
         ] {
-            assert_eq!(delay(input), Duration::from_millis(ms));
+            assert_eq!(delay(input), Duration::from_millis(ms), "{input:?}");
         }
-        assert_eq!(delay(Some((25, 2))), Duration::from_micros(12500));
+        assert_eq!(delay(Some((41, 2))), Duration::from_micros(20500));
     }
     #[test]
     fn finite_infinite_once() {

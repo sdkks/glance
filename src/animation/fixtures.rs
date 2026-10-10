@@ -219,6 +219,37 @@ fn codecs_composition_timing_and_play_counts() {
     }
 }
 #[test]
+fn gif_encoded_centisecond_timing_matrix() {
+    let matrix = [(0, 100), (1, 100), (2, 20), (5, 50), (10, 100), (20, 200)];
+    let mut bytes = Vec::new();
+    {
+        let mut encoder = image::codecs::gif::GifEncoder::new(&mut bytes);
+        for (cs, _) in matrix {
+            encoder
+                .encode_frame(image::Frame::from_parts(
+                    RgbaImage::from_pixel(16, 16, Rgba([255, 0, 0, 255])),
+                    0,
+                    0,
+                    image::Delay::from_numer_denom_ms(cs * 10, 1),
+                ))
+                .unwrap();
+        }
+    }
+    let mut stream = Stream::open(Format::Standard(ImageFormat::Gif), bytes.into())
+        .unwrap()
+        .unwrap();
+    for (cs, ms) in matrix {
+        let frame = stream.next().unwrap().unwrap();
+        assert_eq!(
+            frame.animation_delay,
+            Some(Duration::from_millis(ms)),
+            "{cs} cs"
+        );
+    }
+    assert!(stream.next().unwrap().is_none());
+}
+
+#[test]
 fn prefetch_load_is_first_frame_only() {
     let dir = TempDir::new();
     for (ext, bytes) in [("gif", gif(None)), ("png", apng(0)), ("webp", webp(0))] {

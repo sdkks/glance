@@ -131,8 +131,11 @@ A new file starts playing, regardless of the previous animation's pause state.
 Rotate/mirror/flip, zoom/pan and Actual Size apply to every displayed frame; Copy
 Image copies the currently displayed full composed frame with those transforms.
 
-Missing/zero delay is 100 ms; positive delays below 10 ms are clamped to 10 ms;
-longer fractional delays retain their duration. Timing uses a monotonic clock and
+Browser-compatible timing maps missing/zero delays and encoded delays ≤10 ms
+(0–1 GIF centiseconds) to 100 ms. Other delays have a default 20 ms floor
+(maximum 50 fps): 0, 1, 2, 5, 10 and 20 centiseconds play as 100, 100, 20, 50,
+100 and 200 ms respectively. Delays ≥20 ms, including fractional durations, are
+honored as encoded. The rate cap is not yet configurable. Timing uses a monotonic clock and
 cumulative deadlines, not `now + delay` after every late decode. Under load, late
 frames can be omitted from presentation, but their dependents are decoded in order.
 GPU coverage is admitted atomically; a decoding/upload error retains the prior frame.
