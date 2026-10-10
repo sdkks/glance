@@ -489,7 +489,8 @@ Direct resvg 0.48.0 (text, system-fonts, raster-images; defaults disabled), reex
 ## Native AVIF release provenance and notices
 
 The macOS payload builds **unmodified libavif 1.4.2 upstream source with only
-the dav1d backend**, and copies installed Homebrew dav1d 1.5.4. Source is never
+the dav1d backend**, and unmodified dav1d 1.5.4 upstream source, both at a
+macOS 11.0 minimum. Source is never
 patched or committed. `AVIF_LIBYUV=OFF` means no external libyuv dependency;
 upstream's CMake still compiles its own five-file embedded scaling subset.
 There is therefore libyuv-derived code inside libavif, licensed BSD-3-Clause,
@@ -502,15 +503,10 @@ Exact source/provenance SHA-256 values:
   https://github.com/AOMediaCodec/libavif/archive/refs/tags/v1.4.2.tar.gz
   `2b645287340ba5a631d268b551dc2d72bd73ac33335962dd36dcdb6d8366921d`
   (verified by the build script before extraction).
-- dav1d 1.5.4 source, as recorded by the installed Homebrew SPDX SBOM:
-  https://code.videolan.org/videolan/dav1d/-/archive/1.5.4/dav1d-1.5.4.tar.bz2
-  `2abfb0c89212e6e4733a54e0ae509ec00a5b845a6360946f918806e14aedb011`.
-  Installed bottle SHA-256 in that SBOM:
-  `d30ff747564febd643ec4b279c5adc74f708b8d6eb8e172f914b9fcdec26c464`.
-  Measured arm64 input `libdav1d.7.dylib` SHA-256 before relocation:
-  `60c3a42a79582241ac77bbbba4c0137c2209204aecbc59e5d6392c2dc0a5b439`.
-  The script checks the installed version, copies receipts/SBOM and records
-  input/payload hashes; it does not fetch or verify the dav1d source archive.
+- dav1d 1.5.4 archive:
+  https://downloads.videolan.org/pub/videolan/dav1d/1.5.4/dav1d-1.5.4.tar.xz
+  `686616b7c69eb88d44459391ab25cac13b6647a3b288835c5784e71c1514a5c5`
+  (verified by the build script before extraction). No Homebrew bottle is shipped.
 - Embedded subset: the exact revision included in the pinned libavif 1.4.2
   archive (no independently selected external libyuv release). Under
   `third_party/libyuv/source/`, SHA-256 by file:
@@ -535,9 +531,8 @@ with the decoder libraries:
   does not mean those components are linked.
 - `dav1d-1.5.4-COPYING`: upstream BSD-2-Clause conditions/disclaimer and
   VideoLAN/dav1d authors / Two Orioles, LLC copyright notices.
-- Embedded `AUTHORS` and source hashes, plus the installed Homebrew receipts,
-  SPDX SBOMs and libavif Homebrew LICENSE as additional provenance. The
-  Homebrew libavif binary is **not** the shipped libavif.
+- Embedded `AUTHORS` and source hashes, plus verified native archive SHA-256
+  values as additional provenance. Neither shipped library uses a Homebrew binary.
 
 Only native notices are collected by this target; the final app still needs
 Glance's MIT notice and all Rust/font distribution notices described above.
