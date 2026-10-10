@@ -676,6 +676,36 @@ That alternative is not a project dependency, has not been validated here, and
 need not match sips bytes; `.icns` regeneration still requires macOS.
 See `THIRD_PARTY.md` for the human-supplied artwork provenance.
 
+## Releasing
+
+`Cargo.toml`'s `[package] version` is the single source of truth. These local
+commands never push, publish crates, or create a GitHub Release:
+
+```sh
+make version
+make bump-version BUMP=patch  # also minor or major; patch is the default
+# Alternatively: make bump-version VERSION=0.2.0 (not together with BUMP)
+git diff -- Cargo.toml Cargo.lock CHANGELOG.md
+make release VERSION=0.1.1   # use the version you just reviewed; no second bump
+# Review the release commit and annotated tag, then push explicitly:
+git push origin <branch> v0.1.1
+```
+
+For a one-shot release, `make release BUMP=patch` bumps, commits exactly
+`Cargo.toml`, `Cargo.lock`, and `CHANGELOG.md` with
+`chore(release): release vX.Y.Z`, and creates the annotated `vX.Y.Z` tag.
+It refuses unrelated tracked changes, detached HEAD, an existing tag, or an
+unchanged release file. Bumps refresh the lockfile offline without rebuilding;
+they require the pinned Rust toolchain and cached dependency metadata.
+Notes under `[Unreleased]` become a UTC-dated release with a fresh empty
+`[Unreleased]` section above. Explicit `VERSION` retries do not duplicate notes.
+Failed bumps restore all three files; failed release commits or tag creation
+restore those files and the original index, rolling back the local release commit
+if needed. Do not run concurrent Git operations during release.
+
+Release artifact CI will be added separately; this tooling alone does not build
+or publish distribution artifacts.
+
 ## Licensing
 
 Glance is MIT; see `LICENSE`. Direct dependencies are pinned to eframe 0.36.2
