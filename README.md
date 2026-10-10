@@ -310,7 +310,7 @@ smoke-tested on macOS arm64, not certified on Linux.
 | `verify` | Sequential, fail-fast fmt-check → check → clippy → test, even with `make -j` |
 | `icons` | Rebuild derived icon files from committed masters using macOS `sips` + `iconutil` |
 | `install-hooks` | Opt in to tracked hooks using local `core.hooksPath = .githooks`; refuse conflicts |
-| `uninstall-hooks` | Clear local `core.hooksPath` only when it equals `.githooks` |
+| `uninstall-hooks` | Clear local `core.hooksPath` only when exactly one value equals `.githooks` |
 | `precommit` | `git diff --cached --check`, then working-tree fmt-check and check |
 | `build` | `cargo build --release --locked` |
 | `run` | `cargo run --locked -- $(ARGS)` |
@@ -365,8 +365,9 @@ is refused, never overridden. Inspect conflicts with
 helper validates the executable tracked pre-commit hook and sets only the local
 `core.hooksPath` to `.githooks`. No files are copied into `.git/hooks`; any default
 hooks there remain untouched but are bypassed while `.githooks` is active.
-Uninstallation clears only a local value equal to `.githooks`, refusing foreign
-or unset values; inherited global/system hooksPath settings can then apply again.
+Uninstallation clears the local setting only when exactly one local value exists
+and equals `.githooks`, refusing duplicate, foreign, empty or unset values;
+inherited global/system hooksPath settings can then apply again.
 
 The only active tracked hook is **pre-commit**, which executes `make precommit`.
 There are no commit-msg or post-commit hooks: no message convention or post-commit

@@ -31,14 +31,18 @@ case "${1:-install}" in
         printf '%s\n' 'Tracked hooks activated: pre-commit runs make precommit.'
         ;;
     uninstall)
-        if configured=$(git config --local --get core.hooksPath); then
-            :
+        # A sentinel preserves trailing empty values through command substitution.
+        if configured=$(git config --local --get-all core.hooksPath && printf '.'); then
+            configured=${configured%.}
+            entry_count=$(printf '%s' "$configured" | awk 'END { print NR }')
+            configured=${configured%?}
         else
             status=$?
             [ "$status" -eq 1 ] || exit "$status"
             configured=
+            entry_count=0
         fi
-        [ "$configured" = .githooks ] || refuse "Refusing to clear local core.hooksPath: ${configured:-unset/empty} (expected .githooks)."
+        [ "$entry_count" -eq 1 ] && [ "$configured" = .githooks ] || refuse "Refusing to clear local core.hooksPath: $entry_count entries (${configured:-unset/empty}); expected exactly one .githooks value."
         git config --local --unset-all core.hooksPath
         printf '%s\n' 'Local tracked-hook activation removed; inherited hooksPath settings, if any, still apply.'
         ;;
