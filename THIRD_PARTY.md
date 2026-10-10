@@ -4,8 +4,9 @@ This development inventory records the exact Cargo.lock graph, including
 platform-specific/build/optional packages that may not enter the macOS binary.
 Source archives and checksums are pinned by Cargo.lock. License expressions below
 come from each resolved package manifest, not an assertion of blanket distribution
-clearance. No GPL qView code/assets, native codec provisioning, or modified upstream
-source is included. Direct dependencies: eframe 0.36.2 (MIT OR Apache-2.0), image
+clearance. No GPL qView code/assets or modified upstream
+source is included. AVIF development builds discover native codecs as described below.
+Direct dependencies: eframe 0.36.2 (MIT OR Apache-2.0), image
 0.25.10 (MIT OR Apache-2.0), rfd 0.17.2 (MIT), arboard 3.6.1 (MIT OR Apache-2.0),
 and macOS-only objc2 0.6.5 (MIT), objc2-app-kit 0.3.2 (Zlib OR Apache-2.0 OR MIT),
 objc2-foundation 0.3.2 (MIT), moxcms 0.8.1 (BSD-3-Clause OR Apache-2.0), and
@@ -443,3 +444,34 @@ Direct resvg 0.48.0 (text, system-fonts, raster-images; defaults disabled), reex
 | unicode-vo | 0.1.0 | MIT/Apache-2.0 | https://crates.io/crates/unicode-vo/0.1.0 |
 | usvg | 0.48.1 | Apache-2.0 OR MIT | https://crates.io/crates/usvg/0.48.1 |
 | xmlwriter | 0.1.0 | MIT | https://crates.io/crates/xmlwriter/0.1.0 |
+
+## Native AVIF development adapter
+
+Validated exact pkg-config versions: libavif 1.4.2 and dav1d 1.5.4 (Homebrew,
+macOS arm64). cc 1.7.0 and pkg-config 0.3.34 are now direct build dependencies
+(already resolved, both MIT OR Apache-2.0). A locally authored C shim is compiled
+against the installed header; no upstream source is patched or vendored.
+The adapter selects AVIF_CODEC_CHOICE_DAV1D, maxThreads 2, strict defaults,
+allowProgressive/allowIncremental off, ignoreXMP on, 16384 dimension and
+512 MiB / 8 pixel limits; YUV conversion uses avoidLibYUV and straight RGBA16.
+Only decoder/conversion/free/getter functions are used, never encoder APIs.
+
+libavif's core and obu.c carry BSD-2-Clause notices (Joe Drago; VideoLAN and
+dav1d authors). The installed dav1d public header carries BSD-2-Clause terms
+and copyright VideoLAN/dav1d authors and Two Orioles, LLC. Binary redistribution
+must reproduce the copyright, conditions and disclaimer for both, including
+the exact artifact's additional per-file notices. The installed libavif LICENSE
+also records optional IJG, contrib and Android build-tool notices; applicability
+must be determined from the actual packaged artifact, not this manifest.
+
+The development dylib links libaom and therefore libvmaf in addition to dav1d.
+This graph is NOT approved for shipping. Packaging must build/pin decoder-only
+libavif+dav1d with encoders, libyuv, libvmaf and libheif absent and gather the
+full native notice bundle. This work does not ship those Homebrew libraries.
+The decoder is native in-process code; Rust unwind containment is not native
+fault containment. No distribution clearance or Linux certification is claimed.
+
+Original alpha.png is an independently generated 5×3 16-bit RGBA constant RGB
+(32768,16384,8192), with a five-step alpha ramp. alpha8/10/12.avif were encoded
+with avifenc 1.4.2, --lossless -d 8/10/12 -y 444 --cicp 1/13/0. The fixture
+encoder is a developer tool, not a new runtime dependency.

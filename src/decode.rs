@@ -115,6 +115,9 @@ pub(crate) fn read_encoded(path: &Path) -> Result<Vec<u8>, LoadError> {
 }
 
 fn decode_encoded(format: crate::formats::Format, encoded: Vec<u8>) -> Result<Pixels, LoadError> {
+    if matches!(format, crate::formats::Format::Avif) {
+        return avif::decode(&encoded);
+    }
     if matches!(
         format,
         crate::formats::Format::Svg | crate::formats::Format::Svgz
@@ -252,6 +255,7 @@ fn checked_size(width: u32, height: u32, dimension_limit: u32) -> Result<[usize;
     Ok([width, height])
 }
 
+mod avif;
 mod jxl;
 mod svg;
 

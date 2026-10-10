@@ -169,8 +169,8 @@ synchronous decoder work may finish, but cannot publish into a replaced playback
 Prefetch keeps only the first composed frame; history never retains played frames
 or running decoders. Changing preload depth or sort does not start neighbor playback.
 
-AVIF and JXL sequences remain deferred; JPEG XL still support is described below.
-No AVIF static support is claimed in this increment. 16-bit APNG playback is not
+AVIF and JXL sequences remain deferred; still support is described below.
+16-bit APNG playback is not
 supported; static 16-bit PNG is unchanged. Visual playback and pause/step feel still
 require a human desktop check. For release smoke diagnostics, set
 `GLANCE_TRACE_ANIMATION=1` to log each fully admitted animation frame to stderr;
@@ -350,6 +350,41 @@ rules, not a browser viewport. This increment rasterizes once at intrinsic size
 copies that intrinsic-size bitmap. It does **not** retain the parsed tree or
 re-rasterize at zoom/DPI thresholds: enlargement is a raster preview and may
 pixelate. Scale-aware sharp vector zoom remains unfinished, not claimed here.
+
+## Native AVIF development builds
+
+AVIF (`avif`) stills use an owned header-compiled C shim over libavif, explicitly
+selecting the dav1d decoder (no encoder APIs; YUV conversion avoids libyuv).
+8/10/12-bit sources become full-range straight RGBA U16 and follow ordinary
+ICC normalization, U16 levels, transforms and clipboard conversion. Container
+rotation/mirror is applied once, with EXIF only as a fallback when neither is
+present. ICC is preferred; unsupported CICP RGB primaries/transfer combinations
+are disclosed as an sRGB assumption. PQ/HLG, sequences, clean aperture and
+non-square pixel aspect properties are named unsupported variants, not silently
+misrendered. Native decoding is in-process, not sandboxed.
+
+The default `avif-native` feature probes pkg-config on macOS/Linux. This adapter
+requires libavif ≥1.4.2 and dav1d ≥1.5.4. When absent, compilation succeeds with
+`AVIF support not built: libavif/dav1d not found` and opening AVIF reports the
+same named message. `cargo build --no-default-features` explicitly disables it.
+AVIF remains an eligible extension because the dispatch provides this specific
+unavailable-codec error. Header and library paths must describe the same ABI.
+
+```sh
+# macOS development dependencies
+brew install pkg-config libavif dav1d
+# Linux: repositories must provide the minimum versions above
+sudo apt install pkg-config libavif-dev libdav1d-dev
+```
+
+Validated development versions: Homebrew libavif 1.4.2 + dav1d 1.5.4, macOS
+arm64. The Homebrew libavif dylib also links aom/libvmaf: **this is not the shipping
+artifact**. Release packaging must provide/pin a decoder-only libavif+dav1d build,
+without encoders, libyuv, libvmaf or libheif, and collect exact native notices.
+This increment does not provision that artifact. Linux remains unverified.
+The three original analytic alpha fixtures are generated from `alpha.png` with
+avifenc 1.4.2, lossless, 4:4:4 identity matrix, depths 8/10/12; encoder tools are
+fixture-generation tools only, never linked by Glance's adapter.
 
 ## Current limits and remaining work
 
