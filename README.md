@@ -309,6 +309,8 @@ smoke-tested on macOS arm64, not certified on Linux.
 | `test` | `cargo test --workspace --locked` |
 | `verify` | Sequential, fail-fast fmt-check → check → clippy → test, even with `make -j` |
 | `icons` | Rebuild derived icon files from committed masters using macOS `sips` + `iconutil` |
+| `install-hooks` | Opt in to tracked hooks using local `core.hooksPath = .githooks`; refuse conflicts |
+| `uninstall-hooks` | Clear local `core.hooksPath` only when it equals `.githooks` |
 | `precommit` | `git diff --cached --check`, then working-tree fmt-check and check |
 | `build` | `cargo build --release --locked` |
 | `run` | `cargo run --locked -- $(ARGS)` |
@@ -350,15 +352,25 @@ CI-tier dependency checks require extra tools and advisory/network access, while
 From the repository root:
 
 ```sh
-./scripts/install-hooks.sh
-# Review the validation result, then activate manually:
-git config --local core.hooksPath .githooks
+make install-hooks
+# To remove this local activation later:
+make uninstall-hooks
 ```
 
-The helper validates the tracked hook and refuses a conflicting effective
-`core.hooksPath` or an existing default pre-commit hook. **It never writes Git
-configuration or installs/overwrites a hook.** The tracked hook executes
-`make precommit`. Activation is optional and must be done by you.
+Activation is opt-in. Both targets use `scripts/install-hooks.sh`, which resolves
+the repository root. Installation checks the effective `core.hooksPath`: an
+already-active `.githooks` succeeds without changes; a different nonempty value
+is refused, never overridden. Inspect conflicts with
+`git config --show-origin --get-all core.hooksPath`. When unset or empty, the
+helper validates the executable tracked pre-commit hook and sets only the local
+`core.hooksPath` to `.githooks`. No files are copied into `.git/hooks`; any default
+hooks there remain untouched but are bypassed while `.githooks` is active.
+Uninstallation clears only a local value equal to `.githooks`, refusing foreign
+or unset values; inherited global/system hooksPath settings can then apply again.
+
+The only active tracked hook is **pre-commit**, which executes `make precommit`.
+There are no commit-msg or post-commit hooks: no message convention or post-commit
+check is currently required, so no empty scaffolding is installed.
 
 **Partial-staging caveat:** staged whitespace is checked, but formatting and
 compilation use the whole working tree. This does not compile an isolated
