@@ -64,3 +64,8 @@ audit:
 machete:
 	@cargo machete --version >/dev/null 2>&1 || { printf '%s\n' 'cargo-machete missing; see README installation commands.' >&2; exit 1; }
 	cargo machete
+
+# Reproducible distribution notices (Python 3.11+ is build-time only).
+.PHONY: notices
+notices:
+	python3 scripts/generate-notices.py $(NOTICES_ARGS)

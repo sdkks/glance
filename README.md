@@ -706,6 +706,50 @@ if needed. Do not run concurrent Git operations during release.
 Release artifact CI will be added separately; this tooling alone does not build
 or publish distribution artifacts.
 
+## Packaging notices
+
+Run `make notices` before archiving a release. Cargo and **Python 3.11+**
+(`tomllib`, standard library only) are build-time tools; Python is not shipped or
+required by the viewer. The generator runs `cargo metadata --locked` with no
+platform filter and reads the license allowlist and exact-version exceptions
+from `deny.toml`. SPDX `AND`/`OR`/`WITH` and Cargo's legacy `/` alternatives are
+checked; an expression without an allowed branch fails before output is written.
+`make audit` remains the authoritative advisory/license audit, including license
+text scanning; notice generation is not legal clearance.
+
+`build/notices/` contains `THIRD-PARTY-NOTICES.md`, Glance's MIT `LICENSE`,
+verbatim per-crate license/copyright/notice files (retaining distinct copyright
+holders even for the same license), bundled-font notices, artwork provenance,
+and the unsupported-format statement. Registry manifest paths supplied by Cargo
+locate the installed crate sources, including custom `CARGO_HOME` locations.
+Missing crate license files are explicitly flagged for upstream review; text is
+never invented. Only notices/license texts are copied, not dependency source.
+
+The native AVIF bundler stages libavif, dav1d and the embedded upstream scaling
+subset's exact notices at
+`build/bundle-libs/Contents/Resources/licenses/native/`; generation copies that
+directory and its adjacent bundle `versions.txt` when present. Otherwise the
+notice file contains a clear TODO: **native notices are not yet staged**. That
+TODO is not release-ready: stage native notices first, then regenerate. macOS
+and Linux artifact builders must include the entire generated directory inside
+all `.app`/ZIP/DMG, AppImage and tarball artifacts before signing or archiving,
+not merely publish a separate notice attachment. Packaging integrations are
+maintained with their platform artifact builders.
+
+Output ordering and contents contain no generated timestamps or machine-specific
+crate paths. Repeating generation with identical inputs preserves bytes and
+mtimes. If the graph loses a crate/file, generation refuses stale output rather
+than deleting caller files: select a fresh staging directory. Overrides:
+
+```sh
+make notices NOTICES_ARGS='--output build/notices-release --native-notices build/native-notices'
+# Offline test input only (normal release generation always obtains fresh metadata):
+python3 scripts/generate-notices.py --metadata /tmp/cargo-metadata.json --output build/notices-test
+python3 -m unittest discover -s scripts/tests -p 'test_notices.py'
+```
+
+EXR/HDR, PQ/HLG, XCF and AVIF/JXL sequences remain unsupported.
+
 ## Licensing
 
 Glance is MIT; see `LICENSE`. Direct dependencies are pinned to eframe 0.36.2
