@@ -6,6 +6,11 @@ and versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- Add a DMG install helper and first-launch instructions for self-signed,
+  non-notarized macOS builds.
+
 ## [0.1.1] - 2026-10-11
 
 ### Changed

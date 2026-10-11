@@ -42,6 +42,7 @@ test-scripts:
 	sh scripts/tests/test-macos-floor.sh
 	sh scripts/tests/test-macos-freshness.sh
 	sh scripts/tests/test-macos-inputs.sh
+	sh scripts/tests/test-macos-dmg-extras.sh
 	sh scripts/tests/test-avif-stage-refresh.sh
 	@if python3 -c 'import tomllib' >/dev/null 2>&1; then \
 		python3 -m unittest discover -s scripts/tests -p 'test_notices.py'; \
