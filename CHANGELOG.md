@@ -6,6 +6,12 @@ and versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Fixed
+
+- Avoid spurious `File changed` errors when only file metadata changes during
+  image decoding or animation playback, or the initial file-version read fails.
+  Continue rejecting observed content changes during decoding and playback.
+
 ## [0.2.0] - 2026-10-11
 
 ### Added

@@ -193,7 +193,13 @@ fn run_with(
             }
             let image = load(&path, request.texture_limit);
             let after = FileVersion::read(&path).ok();
-            let image = if version != after {
+            // Without a before-version there is no evidence of a change. A failed
+            // reread of a known version still prevents admitting uncertain pixels.
+            let image = if version.as_ref().is_some_and(|before| {
+                after
+                    .as_ref()
+                    .is_none_or(|after| !before.same_content(after))
+            }) {
                 Err(LoadError::Malformed(
                     "File changed during decoding; retry opening it.".into(),
                 ))
@@ -394,6 +400,148 @@ mod tests {
         ));
         drop(loader);
         worker.join().unwrap();
+    }
+
+    const PPM: &[u8] = b"P6\n1 1\n255\n\x11\x22\x33";
+
+    fn decode_with(
+        path: PathBuf,
+        load: impl Fn(&std::path::Path, u32) -> Result<Pixels, LoadError> + Send + 'static,
+    ) -> Completion {
+        let loader = Loader {
+            shared: Arc::new(shared()),
+        };
+        let worker_shared = Arc::clone(&loader.shared);
+        let worker = thread::spawn(move || run_with(worker_shared, load));
+        loader.request(request_for(1, path));
+        let completion = wait_image(&loader.shared);
+        drop(loader);
+        worker.join().unwrap();
+        completion
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn metadata_only_change_during_decode_is_admitted() {
+        let dir = crate::folder::tests::TempDir::new();
+        let path = dir.0.join("image.ppm");
+        std::fs::write(&path, PPM).unwrap();
+        let completion = decode_with(path, |path, limit| {
+            let image = decode::load(path, limit)?;
+            crate::folder::tests::change_metadata_only(path);
+            Ok(image)
+        });
+        let pixels = completion.image.unwrap().unwrap();
+        assert_eq!(pixels.rgba, [0x11, 0x22, 0x33, 0xff]);
+    }
+
+    #[test]
+    fn failed_before_read_does_not_report_changed_file() {
+        let dir = crate::folder::tests::TempDir::new();
+        let path = dir.0.join("image.ppm");
+        assert!(FileVersion::read(&path).is_err());
+        let completion = decode_with(path, |path, limit| {
+            // The initial stat failed, but the decoder can now open a valid image.
+            std::fs::write(path, PPM).unwrap();
+            decode::load(path, limit)
+        });
+        assert!(completion.version.is_none());
+        let pixels = completion.image.unwrap().unwrap();
+        assert_eq!(pixels.rgba, [0x11, 0x22, 0x33, 0xff]);
+    }
+
+    fn assert_changed(completion: Completion) {
+        assert!(matches!(
+            completion.image,
+            Some(Err(LoadError::Malformed(message)))
+                if message == "File changed during decoding; retry opening it."
+        ));
+    }
+
+    #[test]
+    fn mtime_change_during_decode_is_not_admitted() {
+        let dir = crate::folder::tests::TempDir::new();
+        let path = dir.0.join("image.ppm");
+        std::fs::write(&path, PPM).unwrap();
+        assert_changed(decode_with(path, |path, limit| {
+            let image = decode::load(path, limit)?;
+            std::fs::File::options()
+                .write(true)
+                .open(path)
+                .unwrap()
+                .set_times(
+                    std::fs::FileTimes::new().set_modified(std::time::SystemTime::UNIX_EPOCH),
+                )
+                .unwrap();
+            Ok(image)
+        }));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn replacement_with_same_size_and_mtime_is_not_admitted() {
+        let dir = crate::folder::tests::TempDir::new();
+        let path = dir.0.join("image.ppm");
+        let replacement = dir.0.join("replacement.ppm");
+        std::fs::write(&path, PPM).unwrap();
+        std::fs::write(&replacement, PPM).unwrap();
+        let modified = std::fs::metadata(&path).unwrap().modified().unwrap();
+        std::fs::File::options()
+            .write(true)
+            .open(&replacement)
+            .unwrap()
+            .set_times(std::fs::FileTimes::new().set_modified(modified))
+            .unwrap();
+        assert_changed(decode_with(path, move |path, limit| {
+            let image = decode::load(path, limit)?;
+            std::fs::rename(&replacement, path).unwrap();
+            Ok(image)
+        }));
+    }
+
+    #[test]
+    fn failed_after_read_of_known_version_is_not_admitted() {
+        let dir = crate::folder::tests::TempDir::new();
+        let path = dir.0.join("image.ppm");
+        std::fs::write(&path, PPM).unwrap();
+        assert_changed(decode_with(path, |path, limit| {
+            let image = decode::load(path, limit)?;
+            std::fs::remove_file(path).unwrap();
+            Ok(image)
+        }));
+    }
+
+    #[test]
+    fn missing_before_version_preserves_decoder_error() {
+        let dir = crate::folder::tests::TempDir::new();
+        let completion = decode_with(dir.0.join("image.ppm"), |path, _| {
+            std::fs::write(path, PPM).unwrap();
+            Err(LoadError::Unsupported)
+        });
+        assert!(matches!(
+            completion.image,
+            Some(Err(LoadError::Unsupported))
+        ));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn alias_and_canonical_paths_each_decode_without_spurious_change() {
+        let dir = crate::folder::tests::TempDir::new();
+        let path = dir.0.join("image.ppm");
+        let alias = dir.0.join("alias");
+        std::fs::write(&path, PPM).unwrap();
+        std::os::unix::fs::symlink(&dir.0, &alias).unwrap();
+        let canonical = std::fs::canonicalize(&path).unwrap();
+        let aliased = alias.join("image.ppm");
+        let a = FileVersion::read(&aliased).unwrap();
+        let b = FileVersion::read(&canonical).unwrap();
+        assert_ne!(a, b, "cache keys retain path spellings");
+        assert!(a.same_content(&b));
+        for path in [aliased, canonical] {
+            let pixels = decode_with(path, decode::load).image.unwrap().unwrap();
+            assert_eq!(pixels.rgba, [0x11, 0x22, 0x33, 0xff]);
+        }
     }
 
     #[test]
