@@ -17,11 +17,27 @@ Download the Apple Silicon DMG or zip from the
 There is no Intel or Universal build. The declared minimum is macOS 11.0;
 see [installation notes](docs/installing.md#macos-releases) for compatibility caveats.
 
-Mount the DMG and double-click `Install Glance.command`, or extract the zip and
-drag `Glance.app` to Applications (do not run it from the disk image).
-These builds are self-signed and not notarized, so macOS blocks a downloaded copy.
-See [first-launch instructions](docs/installing.md#macos-releases) for the helper,
-System Settings → Privacy & Security → **Open Anyway**, and the Terminal alternative.
+Mount the DMG or extract the zip, then drag `Glance.app` to Applications.
+These builds are self-signed and not notarized because the project has no paid
+Apple Developer ID. There is no double-click first-launch bypass for a
+quarantined download; only Developer ID-signed, notarized builds avoid this
+friction. Only bypass the block if you trust the download and have checked its
+source and checksum.
+
+1. In Terminal, run `xattr -dr com.apple.quarantine /Applications/Glance.app`,
+   then open the installed app normally.
+2. Alternatively, try opening the installed app, then use **System Settings →
+   Privacy & Security → Open Anyway** and confirm the prompt.
+3. To avoid the prompt, download without a browser (`gh release download` or
+   `curl`), or use a package manager; CLI downloads are not quarantined. Glance
+   has no package-manager release; see the source-build instructions below.
+4. To use the DMG helper, run
+   `bash "/Volumes/Glance <version>/Install Glance.command"` in Terminal,
+   replacing `<version>` with the mounted DMG version. Double-clicking the
+   helper is blocked while the file is quarantined.
+
+Do not run the app from the disk image; eject it after installation. See
+[first-launch instructions](docs/installing.md#macos-releases) for details.
 
 ### Install on Linux
 

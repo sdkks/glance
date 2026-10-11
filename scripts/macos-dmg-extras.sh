@@ -5,7 +5,8 @@ output=${1:?target directory required}
 mkdir -p "$output"
 cat > "$output/Install Glance.command" <<'HELPER'
 #!/bin/bash
-# Double-click from the mounted DMG, or preview: PREFIX=/absolute/path DRY_RUN=1 bash ...
+# Finder blocks this helper while quarantined; run it from Terminal with bash.
+# Preview without changes: PREFIX=/absolute/path DRY_RUN=1 bash ...
 set -eu
 fail() { printf 'Install failed: %s\n' "$*" >&2; exit 1; }
 action() {
@@ -90,27 +91,35 @@ chmod 755 "$output/Install Glance.command"
 cat > "$output/Read Me.txt" <<'README'
 Installing Glance on macOS
 
-Glance is self-signed (ad-hoc signed), not notarized. This project does not
-have a paid Apple Developer ID, so macOS blocks a downloaded copy on first
-launch. Only bypass that block if you trust the download and have checked
-its source and checksum.
+Glance is self-signed (ad-hoc signed) and not notarized because this project
+has no paid Apple Developer ID. There is no double-click first-launch bypass
+for a quarantined download; only Developer ID-signed, notarized builds avoid
+this friction. Only bypass the block if you trust the download and have
+checked its source and checksum.
 
 Choose one of these routes:
 
-1. Double-click Install Glance.command in this disk image. It quits Glance,
-   preserves an existing copy in your Trash, installs in /Applications
-   (or ~/Applications if /Applications is not writable), removes the download
-   quarantine flag, registers the app and launches it.
-2. Drag Glance.app to Applications, try opening it, then use System Settings
-   -> Privacy & Security -> "Open Anyway" and confirm the prompt.
-3. Drag Glance.app to Applications, then run this in Terminal:
+1. Terminal: drag Glance.app to Applications, then run:
    xattr -dr com.apple.quarantine /Applications/Glance.app
-   Open the installed app normally afterwards.
+   Open the installed app normally afterwards. Use the installed path if
+   you chose a different directory.
+2. System Settings: drag Glance.app to Applications and try opening it.
+   Then go to System Settings -> Privacy & Security -> "Open Anyway"
+   and confirm the prompt.
+3. Avoid the prompt: download without a browser (gh release download or
+   curl), or use a package manager. CLI downloads are not quarantined.
+   Glance does not currently provide a package-manager release; see the
+   installation docs for source-build instructions.
+4. Helper: run it from Terminal, replacing <version> with the DMG version:
+   bash "/Volumes/Glance <version>/Install Glance.command"
+   Double-clicking it is blocked while the file is quarantined. The helper
+   quits Glance, preserves an existing copy in your Trash, installs in
+   /Applications (or ~/Applications if /Applications is not writable),
+   removes the quarantine flag, registers the app and launches it.
 
-For a manual install, drag the app to Applications instead of running it
-from this disk image. Eject the disk image after installation.
+Do not run the app from this disk image. Eject the image after installation.
 
-The helper can also be previewed from Terminal without making changes:
-DRY_RUN=1 bash "/path/to/Install Glance.command"
+Preview the helper from Terminal without making changes:
+DRY_RUN=1 bash "/Volumes/Glance <version>/Install Glance.command"
 To choose another install directory, set PREFIX to an absolute path.
 README

@@ -26,6 +26,17 @@ grep -F 'action "$register" -f "$destination"' "$helper"
 grep -F 'self-signed' "$image/Read Me.txt"
 grep -F 'not notarized' "$image/Read Me.txt"
 grep -F 'Open Anyway' "$image/Read Me.txt"
+grep -F 'xattr -dr com.apple.quarantine /Applications/Glance.app' "$image/Read Me.txt"
+grep -Fx '   bash "/Volumes/Glance <version>/Install Glance.command"' "$image/Read Me.txt"
+grep -F 'has no paid Apple Developer ID' "$image/Read Me.txt"
+grep -F 'for a quarantined download; only Developer ID-signed, notarized builds avoid' "$image/Read Me.txt"
+grep -F 'Double-clicking it is blocked while the file is quarantined.' "$image/Read Me.txt"
+# Keep the actionable manual routes ahead of the helper.
+routes=$(grep -E '^[1-4]\. ' "$image/Read Me.txt")
+[ "$routes" = '1. Terminal: drag Glance.app to Applications, then run:
+2. System Settings: drag Glance.app to Applications and try opening it.
+3. Avoid the prompt: download without a browser (gh release download or
+4. Helper: run it from Terminal, replacing <version> with the DMG version:' ]
 # All potentially mutating PATH commands fail loudly if dry-run executes them.
 for tool in mkdir mv ditto xattr open pgrep pkill sleep; do
     printf '#!/bin/sh\nprintf "Unexpected action: %%s\\n" "$0" >&2\nexit 99\n' > "$work/bin/$tool"

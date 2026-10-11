@@ -6,6 +6,12 @@ and versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Fixed
+
+- Correct macOS first-launch guidance: lead with Terminal and System Settings
+  routes, explain notarization, and clarify that a quarantined DMG helper must
+  be run from Terminal rather than double-clicked.
+
 ## [0.1.3] - 2026-10-11
 
 ### Fixed
