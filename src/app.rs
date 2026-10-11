@@ -100,6 +100,7 @@ enum Command {
     NextFrame,
     Depth(usize),
     Rate(crate::animation::Rate),
+    #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
     OpenPolicy(crate::settings::OpenNewFiles),
     Open,
     Navigate(Direction),
@@ -1071,6 +1072,7 @@ impl Viewer {
                 );
             });
             ui.separator();
+            #[cfg(target_os = "macos")]
             ui.menu_button("Open new files in", |ui| {
                 open_policy_menu(ui, self.settings.open_new_files, command);
             });
@@ -1179,6 +1181,7 @@ fn animation_rate_menu(
     }
 }
 
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
 fn open_policy_menu(
     ui: &mut egui::Ui,
     active: crate::settings::OpenNewFiles,
