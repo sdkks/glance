@@ -655,6 +655,8 @@ verification on target desktops. No qView code or assets are included.
 
 ## Development and quality gates
 
+Builds record the source commit SHA; see **Help → About Glance** to identify a binary.
+
 The pinned Rust toolchain is **1.97.1**, with rustfmt and Clippy. Install it yourself
 before running checks; gates do not install tools, update the lockfile, or fix files.
 `Cargo.lock` is committed. Linux builds need the normal windowing/graphics system
