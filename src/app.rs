@@ -266,6 +266,14 @@ pub struct Viewer {
 
 impl Viewer {
     pub fn new(cc: &eframe::CreationContext<'_>, initial: Option<PathBuf>) -> Self {
+        // AppKit installs its own aevt/odoc handler while finishing launch,
+        // replacing an earlier registration. Register here, after that launch.
+        // winit owns the application delegate and panics on a foreign delegate,
+        // so replacing the delegate is not an available document-open seam.
+        #[cfg(target_os = "macos")]
+        crate::open_documents::register(
+            objc2::MainThreadMarker::new().expect("the viewer must start on the main thread"),
+        );
         cc.egui_ctx.set_visuals(egui::Visuals::dark());
         let (loader, display) = match Loader::new(cc.egui_ctx.clone()) {
             Ok(loader) => (Some(loader), Display::new(Status::Empty)),
@@ -333,6 +341,11 @@ impl Viewer {
             crate::open_documents::attach_context(&cc.egui_ctx);
             // Always consume the launch batch, but preserve CLI precedence.
             let document = crate::open_documents::drain(initial.as_deref());
+            if initial.is_none()
+                && let Some(path) = document.as_deref()
+            {
+                crate::open_documents::trace_open(path);
+            }
             initial.or(document)
         };
         if let Some(path) = initial {
@@ -1182,6 +1195,7 @@ impl eframe::App for Viewer {
     fn logic(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         #[cfg(target_os = "macos")]
         if let Some(path) = crate::open_documents::drain(self.selected.as_deref()) {
+            crate::open_documents::trace_open(&path);
             self.open(path);
         }
         if let Some(loader) = &self.loader {

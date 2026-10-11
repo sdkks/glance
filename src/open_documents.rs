@@ -26,6 +26,14 @@ impl DocumentQueue {
     }
 }
 
+fn event_trace(descriptors: isize, queued: &[PathBuf]) -> String {
+    format!(
+        "GLANCE_TRACE_OPEN descriptors={descriptors} queued={} first={:?}",
+        queued.len(),
+        queued.first().map(|path| path.as_path())
+    )
+}
+
 #[cfg(target_os = "macos")]
 mod native {
     use super::*;
@@ -42,6 +50,17 @@ mod native {
 
     static DOCUMENTS: Mutex<DocumentQueue> = Mutex::new(DocumentQueue(Vec::new()));
     static CONTEXT: OnceLock<egui::Context> = OnceLock::new();
+
+    fn trace_enabled() -> bool {
+        static ENABLED: OnceLock<bool> = OnceLock::new();
+        *ENABLED.get_or_init(|| std::env::var_os("GLANCE_TRACE_OPEN").is_some_and(|v| v == "1"))
+    }
+
+    pub fn trace_open(path: &Path) {
+        if trace_enabled() {
+            eprintln!("GLANCE_TRACE_OPEN viewer opening queued document {path:?}");
+        }
+    }
 
     fn descriptor_path(descriptor: &NSAppleEventDescriptor) -> Option<PathBuf> {
         // Coercing arbitrary text to a file URL treats it as a legacy HFS path
@@ -75,16 +94,27 @@ mod native {
                 event: &NSAppleEventDescriptor,
                 reply: &NSAppleEventDescriptor,
             ) {
+                let trace = trace_enabled();
+                if trace {
+                    eprintln!("GLANCE_TRACE_OPEN handler invoked pid={}", std::process::id());
+                }
                 if let Some(list) = event.paramDescriptorForKeyword(keyDirectObject) {
                     let mut queue = DOCUMENTS.lock().unwrap_or_else(|e| e.into_inner());
+                    let start = queue.0.len();
+                    let descriptors = list.numberOfItems();
                     // AppleEvent list indices are one-based.
-                    for index in 1..=list.numberOfItems() {
+                    for index in 1..=descriptors {
                         if let Some(path) = list.descriptorAtIndex(index)
                             .and_then(|descriptor| descriptor_path(&descriptor))
                         {
                             queue.push(path);
                         }
                     }
+                    if trace {
+                        eprintln!("{}", event_trace(descriptors, &queue.0[start..]));
+                    }
+                } else if trace {
+                    eprintln!("{}", event_trace(0, &[]));
                 }
                 reply.setParamDescriptor_forKeyword(
                     &NSAppleEventDescriptor::nullDescriptor(), keyDirectObject,
@@ -113,6 +143,12 @@ mod native {
                 );
         }
         std::mem::forget(handler);
+        if trace_enabled() {
+            eprintln!(
+                "GLANCE_TRACE_OPEN late aevt/odoc registration pid={}",
+                std::process::id()
+            );
+        }
     }
 
     pub fn attach_context(ctx: &egui::Context) {
@@ -170,11 +206,30 @@ mod native {
 }
 
 #[cfg(target_os = "macos")]
-pub use native::{attach_context, drain, register};
+pub use native::{attach_context, drain, register, trace_open};
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn event_trace_counts_only_this_batch_without_consuming_queue() {
+        let mut queue = DocumentQueue::default();
+        queue.push("/tmp/older.png".into());
+        let start = queue.0.len();
+        queue.push("/tmp/a b.png".into());
+        queue.push("/tmp/second.png".into());
+        assert_eq!(
+            event_trace(3, &queue.0[start..]),
+            "GLANCE_TRACE_OPEN descriptors=3 queued=2 first=Some(\"/tmp/a b.png\")"
+        );
+        assert_eq!(
+            event_trace(0, &[]),
+            "GLANCE_TRACE_OPEN descriptors=0 queued=0 first=None"
+        );
+        assert_eq!(queue.drain(None), Some(PathBuf::from("/tmp/older.png")));
+        assert_eq!(queue.drain(None), None);
+    }
 
     #[test]
     fn document_references_are_local_absolute_paths() {
