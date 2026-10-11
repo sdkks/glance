@@ -116,6 +116,7 @@ Viewer shortcuts are suppressed while menus or another control own focus.
 | Mirror horizontally / flip vertically | `M` / `F` |
 | Pause / resume animation | `P` |
 | Next animation frame | `.` |
+| Cycle the backdrop behind transparency | `b` |
 
 **⌘Q / Ctrl+Q** quits all windows; closing the last window also quits Glance.
 Both close and quit shortcuts follow the viewer's focus rules.
@@ -128,11 +129,17 @@ Use **Playback → Pause/Resume** or **Next Frame** to inspect them.
 **Settings → Animation rate** offers file timing, fixed frame rates,
 and **Off (first frame only)**. Space remains temporary pan, not playback.
 
+Pixels with transparency composite against a backdrop: `b` cycles it for the
+current image (white → grey → black), and **Settings → Background color** sets
+the saved default. Black is the standard appearance, so nothing changes until
+you cycle.
+
 **Settings → Preload depth** controls neighbor decoding and resident history.
-For transparency, `b` cycles this image's backdrop; **Settings → Background color** saves the default (white/grey/black).
-Preload depth, animation rate and the open-new-files choice are saved on macOS and Linux; sort is not.
+Preload depth, animation rate, background color and the open-new-files choice
+are saved on macOS and Linux; sort is not.
 See [animation playback](docs/usage.md#animation-playback),
-[preloading](docs/usage.md#preloading-and-resident-history) and
+[preloading](docs/usage.md#preloading-and-resident-history),
+[transparency backdrop](docs/usage.md#transparency-backdrop) and
 [settings persistence](docs/usage.md#settings-persistence) for details.
 
 ### Clipboard, reveal and transforms
