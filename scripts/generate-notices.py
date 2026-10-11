@@ -77,7 +77,7 @@ def generate(root, metadata, policy, native):
              "License files are copied verbatim per crate: copyright notices are not deduplicated.",
              "Missing files are explicitly noted, not replaced with invented license text.", "",
              "Glance is MIT; see LICENSE. The app icon is independently authored, human-supplied",
-             "artwork for this MIT app, not qView/GPL artwork or a third-party icon set.", "",
+             "artwork for this MIT app, not third-party artwork or an icon set.", "",
              "EXR/HDR, PQ/HLG, XCF and AVIF/JXL sequences are not supported yet.", "",
              f"## Resolved dependencies ({len(packages)} crates)", "",
              "| Crate | Version | License expression | Repository | License/notice files |",

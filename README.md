@@ -4,6 +4,10 @@ An independently authored MIT desktop image viewer, built with Rust and
 eframe/egui's wgpu renderer. Opens the raster and icon formats listed below;
 it is not yet the complete planned viewer.
 
+qView was studied as prior art for its interaction model and feature set. Glance
+shares no qView code or assets and is not derived from it; it is an independent
+Rust implementation under its own MIT license.
+
 ```sh
 make run ARGS='/absolute/path/to/image.png'
 # Or:
@@ -651,7 +655,8 @@ format (hardware sRGB encoding or explicit OETF, never both). Other formats
 error. Native menus/document-open
 integration and Linux desktop validation are later increments.
 Interactive zoom/pan feel and real input-device classification still need human
-verification on target desktops. No qView code or assets are included.
+verification on target desktops. See the top of this file for the
+no-shared-code provenance note.
 
 ## Development and quality gates
 

@@ -4,8 +4,8 @@ This development inventory records the exact Cargo.lock graph, including
 platform-specific/build/optional packages that may not enter the macOS binary.
 Source archives and checksums are pinned by Cargo.lock. License expressions below
 come from each resolved package manifest, not an assertion of blanket distribution
-clearance. No GPL qView code/assets or modified upstream
-source is included. AVIF development builds discover native codecs as described below.
+clearance. No qView code or assets are included; qView is prior art only, and no
+modified upstream source is included. AVIF development builds discover native codecs as described below.
 Direct dependencies: eframe 0.36.2 (MIT OR Apache-2.0), image
 0.25.10 (MIT OR Apache-2.0), rfd 0.17.2 (MIT), arboard 3.6.1 (MIT OR Apache-2.0),
 and macOS-only objc2 0.6.5 (MIT), objc2-app-kit 0.3.2 (Zlib OR Apache-2.0 OR MIT),
@@ -37,7 +37,7 @@ The app icons are independently authored, human-supplied artwork for this MIT
 app. The source of truth is `assets/icon/glance-icon-master.png`, supplied by the
 human on 2026-10-10 as `glance-enhanced.png` (2048×2048 RGBA with a real alpha
 channel; rounded edges transparent). All platform icon sizes derive from it via
-`make icons`. No qView/GPL assets or third-party icon sets are used. An earlier
+`make icons`. No third-party icon sets are used. An earlier
 attempt that cropped a supplied artwork sheet by a mismatched reference grid was
 rejected by the human and removed. The original Downloads file is not needed to
 build or regenerate the icons; no Python or extra tooling is required.
