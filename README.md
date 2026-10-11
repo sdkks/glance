@@ -983,9 +983,12 @@ keys use the Cargo version. The declared and compiled minimum macOS version is
 actual oldest-OS compatibility remains unverified. Imported image UTIs cover
 all eligible extensions in `src/formats.rs` (including flattened documents),
 with role **Viewer** and handler rank **Alternate**, never Owner/Default.
-Registration does not change existing default associations. Native Finder
-file-open event handling is still deferred: launch with a CLI image argument
-or use Open/drop inside the app; registration alone does not implement events.
+Registration does not change existing default associations. Glance handles native
+Finder document-open events: double-clicking an associated image or dropping
+files onto its Dock icon opens the first local document, whether Glance is
+already running or launched by the event. CLI image arguments retain precedence
+at startup. Real Finder/Dock delivery and reply timing, including on macOS 11,
+remain unverified; Open/drop inside the window and CLI opening remain available.
 
 Native AVIF is bundled **by default**: `make macos-artifacts` runs `make
 bundle-avif` when `AVIF_STAGE` (default `build/bundle-libs`) does not exist,

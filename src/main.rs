@@ -10,6 +10,8 @@ mod folder;
 mod formats;
 mod levels;
 mod loader;
+#[cfg(any(target_os = "macos", test))]
+mod open_documents;
 mod render;
 mod settings;
 mod tiles;
@@ -46,6 +48,10 @@ fn main() -> eframe::Result {
             }
         }
     }
+    #[cfg(target_os = "macos")]
+    open_documents::register(
+        objc2::MainThreadMarker::new().expect("the viewer must start on the main thread"),
+    );
     let options = eframe::NativeOptions {
         renderer: eframe::Renderer::Wgpu,
         viewport: egui::ViewportBuilder::default()
