@@ -4,6 +4,7 @@ struct Mapping {
     source_y: vec4<f32>,
     other_x: vec4<f32>,
     other_y: vec4<f32>,
+    // x = level blend weight; yzw = backdrop RGB in linear light.
     blend: vec4<f32>,
 }
 @group(0) @binding(0) var<uniform> mapping: Mapping;
@@ -31,7 +32,7 @@ fn composite(input: Vertex) -> vec3<f32> {
     let b = textureSample(other, image_sampler, input.other_uv);
     let color = mix(a, b, mapping.blend.x);
     // RGB is already premultiplied in linear light. Never multiply alpha again.
-    return color.rgb + vec3(0.006048833) * (1.0 - color.a);
+    return color.rgb + mapping.blend.yzw * (1.0 - color.a);
 }
 @fragment fn linear(input: Vertex) -> @location(0) vec4<f32> {
     return vec4(composite(input), 1);

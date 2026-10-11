@@ -19,6 +19,15 @@ pub struct Pixels {
 }
 
 impl Pixels {
+    // Inspect the authoritative straight-alpha source, never rounded clipboard pixels.
+    pub fn has_transparency(&self) -> bool {
+        if let Some(rgba) = &self.rgba16 {
+            rgba.chunks_exact(4).any(|pixel| pixel[3] != u16::MAX)
+        } else {
+            self.rgba.chunks_exact(4).any(|pixel| pixel[3] != u8::MAX)
+        }
+    }
+
     pub fn accounted_bytes(&self) -> usize {
         self.source_bytes() + self.levels.iter().map(|l| l.rgba.len()).sum::<usize>()
     }
@@ -36,6 +45,39 @@ impl Pixels {
             self.rgba[index * 4..index * 4 + 4]
                 .try_into()
                 .expect("checked source")
+        }
+    }
+}
+
+#[cfg(test)]
+mod transparency_tests {
+    use super::*;
+
+    #[test]
+    fn rgba_detects_partial_and_fully_transparent_pixels_only() {
+        let mut pixels = Pixels {
+            rgba: vec![0, 128, 255, 255, 255, 0, 0, 255],
+            ..Default::default()
+        };
+        assert!(!pixels.has_transparency());
+        for alpha in [254, 128, 0] {
+            pixels.rgba[7] = alpha;
+            assert!(pixels.has_transparency());
+        }
+        assert!(!Pixels::default().has_transparency());
+    }
+
+    #[test]
+    fn rgba16_checks_full_precision_and_takes_precedence_over_rgba() {
+        let mut pixels = Pixels {
+            rgba: vec![0; 4],
+            rgba16: Some(vec![0, 32768, 65535, 65535, 65535, 0, 0, 65535]),
+            ..Default::default()
+        };
+        assert!(!pixels.has_transparency());
+        for alpha in [65534, 32768, 0] {
+            pixels.rgba16.as_mut().unwrap()[7] = alpha;
+            assert!(pixels.has_transparency());
         }
     }
 }

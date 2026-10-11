@@ -1,6 +1,7 @@
 use crate::{
     decode::{LoadError, Pixels},
     levels,
+    settings::Background,
     tiles::{self, Key},
     transform::Transform,
 };
@@ -27,6 +28,7 @@ pub struct Prepared {
 pub struct Image {
     pub size: [usize; 2],
     pub pixels: Arc<Pixels>,
+    pub has_transparency: bool,
     pipeline: wgpu::RenderPipeline,
     layout: wgpu::BindGroupLayout,
     linear: wgpu::Sampler,
@@ -174,6 +176,8 @@ impl Image {
             ));
         }
         let core = tiles::core(state.device.limits().max_texture_dimension_2d)?;
+        // Scan once for this ready resident, not in the per-frame callback.
+        let has_transparency = pixels.has_transparency();
         let device = &state.device;
         checked(device, || {
             let mut entries = vec![wgpu::BindGroupLayoutEntry {
@@ -259,6 +263,7 @@ impl Image {
             Ok(Arc::new(Self {
                 size: pixels.svg.as_ref().map_or(pixels.size, |svg| svg.size),
                 pixels,
+                has_transparency,
                 pipeline,
                 layout,
                 linear,
@@ -389,6 +394,8 @@ impl Image {
         })
     }
 
+    // Keep the per-paint framing and appearance explicit at the callback boundary.
+    #[allow(clippy::too_many_arguments)]
     pub fn callback(
         self: &Arc<Self>,
         state: &egui_wgpu::RenderState,
@@ -397,6 +404,7 @@ impl Image {
         transform: Transform,
         physical_scale: f32,
         frame: u64,
+        background: Background,
     ) -> Result<Option<Prepared>, LoadError> {
         // View framing remains in intrinsic SVG units; levels are in raster pixels.
         let physical_scale = if self.pixels.svg.is_some() {
@@ -468,7 +476,7 @@ impl Image {
                     };
                     let ra = rows(ta, self.pixels.levels[a].size);
                     let rb = rows(tb, self.pixels.levels[b].size);
-                    let mix = [blend, 0.0, 0.0, 0.0];
+                    let mix = blend_uniform(blend, background);
                     let bytes: Vec<u8> = bounds
                         .iter()
                         .chain(ra.iter().flatten())
@@ -530,6 +538,13 @@ impl Image {
             }))
         })
     }
+}
+
+// Matches Mapping.blend in image.wgsl: x = level blend, yzw = linear backdrop RGB.
+// All six uniform members are vec4<f32>, packed sequentially at 16-byte boundaries.
+fn blend_uniform(blend: f32, background: Background) -> [f32; 4] {
+    let value = background.linear();
+    [blend, value, value, value]
 }
 
 fn source_visible(canvas: egui::Rect, rect: egui::Rect, transform: Transform) -> [f32; 4] {
@@ -602,6 +617,23 @@ impl egui_wgpu::CallbackTrait for Paint {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn backdrop_uniform_preserves_black_and_linearizes_white_and_grey() {
+        assert_eq!(
+            blend_uniform(0.25, Background::Black),
+            [0.25, 0.006048833, 0.006048833, 0.006048833]
+        );
+        assert_eq!(
+            blend_uniform(0.75, Background::White),
+            [0.75, 1.0, 1.0, 1.0]
+        );
+        let grey = ((128.0_f32 / 255.0 + 0.055) / 1.055).powf(2.4);
+        assert_eq!(
+            blend_uniform(0.5, Background::Grey),
+            [0.5, grey, grey, grey]
+        );
+    }
+
     #[test]
     fn callback_obeys_wgpu_thread_contract() {
         fn assert_callback<T: egui_wgpu::CallbackTrait + Send + Sync>() {}

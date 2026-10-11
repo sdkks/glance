@@ -6,6 +6,12 @@ and versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- Add `b` to cycle white/grey/black behind transparent pixels for the current
+  image, with a persisted default in `Settings ▸ Background color`. Black keeps
+  the existing near-black appearance; opaque images are unchanged.
+
 ## [0.2.1] - 2026-10-11
 
 ### Fixed

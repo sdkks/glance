@@ -34,11 +34,61 @@ impl OpenNewFiles {
     }
 }
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum Background {
+    White,
+    Grey,
+    #[default]
+    Black,
+}
+
+impl Background {
+    pub const ALL: [(Self, &str); 3] = [
+        (Self::White, "White"),
+        (Self::Grey, "Grey"),
+        (Self::Black, "Black"),
+    ];
+
+    fn parse(key: &str) -> Self {
+        match key {
+            "white" => Self::White,
+            "grey" => Self::Grey,
+            _ => Self::Black,
+        }
+    }
+
+    fn key(self) -> &'static str {
+        match self {
+            Self::White => "white",
+            Self::Grey => "grey",
+            Self::Black => "black",
+        }
+    }
+
+    pub fn next(self) -> Self {
+        match self {
+            Self::White => Self::Grey,
+            Self::Grey => Self::Black,
+            Self::Black => Self::White,
+        }
+    }
+
+    pub fn linear(self) -> f32 {
+        match self {
+            Self::White => 1.0,
+            Self::Grey => crate::levels::linear(128),
+            // Preserve the previous shader constant exactly, not a recalculation.
+            Self::Black => 0.006048833,
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Settings {
     pub preload_depth: usize,
     pub animation_rate: crate::animation::Rate,
     pub open_new_files: OpenNewFiles,
+    pub background: Background,
 }
 
 impl Default for Settings {
@@ -47,6 +97,7 @@ impl Default for Settings {
             preload_depth: 1,
             animation_rate: Default::default(),
             open_new_files: Default::default(),
+            background: Default::default(),
         }
     }
 }
@@ -69,15 +120,20 @@ impl Settings {
             .get("open-new-files-in")
             .and_then(|value| value.as_str())
             .map_or(Default::default(), OpenNewFiles::parse);
+        settings.background = document
+            .get("background-color")
+            .and_then(|value| value.as_str())
+            .map_or(Default::default(), Background::parse);
         Ok(settings)
     }
 
     fn text(self) -> String {
         format!(
-            "preload-depth = {}\nanimation-rate = \"{}\"\nopen-new-files-in = \"{}\"\n",
+            "preload-depth = {}\nanimation-rate = \"{}\"\nopen-new-files-in = \"{}\"\nbackground-color = \"{}\"\n",
             self.preload_depth,
             self.animation_rate.key(),
-            self.open_new_files.key()
+            self.open_new_files.key(),
+            self.background.key()
         )
     }
 }
@@ -199,6 +255,52 @@ mod tests {
     use crate::folder::tests::TempDir;
 
     #[test]
+    fn backgrounds_roundtrip_and_default_to_black() {
+        assert_eq!(Settings::default().background, Background::Black);
+        assert_eq!(Settings::parse("").unwrap().background, Background::Black);
+        let dir = TempDir::new();
+        let path = dir.0.join("settings.toml");
+        for (background, _) in Background::ALL {
+            let settings = Settings {
+                preload_depth: 4,
+                animation_rate: crate::animation::Rate::Exact,
+                open_new_files: OpenNewFiles::NewWindow,
+                background,
+            };
+            let mut store = Store {
+                path: Some(path.clone()),
+            };
+            store.save(settings);
+            assert_eq!(Store::load_at(Some(path.clone())).0, settings);
+        }
+    }
+
+    #[test]
+    fn invalid_background_preserves_other_preferences() {
+        for value in ["'future'", "'WHITE'", "42", "false", "[]", "{}"] {
+            let settings = Settings::parse(&format!(
+                "preload-depth = 4\nanimation-rate = 'exact'\nopen-new-files-in = 'new-window'\nbackground-color = {value}\n"
+            )).unwrap();
+            assert_eq!(
+                settings,
+                Settings {
+                    preload_depth: 4,
+                    animation_rate: crate::animation::Rate::Exact,
+                    open_new_files: OpenNewFiles::NewWindow,
+                    background: Background::Black,
+                }
+            );
+        }
+    }
+
+    #[test]
+    fn backgrounds_cycle_white_grey_black_white() {
+        assert_eq!(Background::White.next(), Background::Grey);
+        assert_eq!(Background::Grey.next(), Background::Black);
+        assert_eq!(Background::Black.next(), Background::White);
+    }
+
+    #[test]
     fn open_policy_roundtrips_and_missing_key_preserves_current_window_default() {
         let dir = TempDir::new();
         let path = dir.0.join("settings.toml");
@@ -207,6 +309,7 @@ mod tests {
                 preload_depth: 3,
                 animation_rate: crate::animation::Rate::Fps10,
                 open_new_files,
+                ..Default::default()
             };
             let mut store = Store {
                 path: Some(path.clone()),
@@ -226,6 +329,7 @@ mod tests {
                 preload_depth: 4,
                 animation_rate: crate::animation::Rate::Exact,
                 open_new_files: OpenNewFiles::CurrentWindow,
+                ..Default::default()
             }
         );
         assert_eq!(
@@ -247,6 +351,7 @@ mod tests {
                     preload_depth: 4,
                     animation_rate: crate::animation::Rate::Exact,
                     open_new_files: OpenNewFiles::CurrentWindow,
+                    ..Default::default()
                 }
             );
         }
