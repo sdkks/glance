@@ -1,6 +1,6 @@
 # Installing Glance
 
-Installation and source-build instructions for macOS and Linux. For everyday controls, see [Using Glance](usage.md). For distribution builds, see [Packaging and releases](packaging.md).
+Installation and source-build instructions for macOS and Linux. For everyday controls, see [Using Glance](usage.md). For distribution builds, see [Packaging](packaging.md).
 
 ## macOS releases
 
@@ -40,8 +40,9 @@ The pinned runtime embeds libfuse. AppImage desktop integration is not automatic
 use your desktop's integration tool or **Open With**. The embedded desktop entry
 is not installed into the host application database. For default associations,
 see [default-viewer setup](usage.md#making-glance-the-default-image-viewer).
-For runtime dependencies and verification, see
-[Linux AppImage packaging](packaging.md#linux-appimage-packaging).
+For runtime dependencies, see
+[Linux AppImage packaging](packaging.md#linux-appimage-packaging). For verification,
+see the [Linux verification recipe](development.md#linux-verification-recipe).
 
 ## Building from source
 
@@ -134,4 +135,4 @@ run only for an unstaged `$HOME/.local` install/uninstall; MIME refresh also
 requires an existing `share/mime` directory. Custom/staged prefixes skip caches.
 
 
-See [Linux source-install verification](packaging.md#linux-source-install-verification) for association checks and the install/uninstall smoke recipe. See [default-viewer setup](usage.md#making-glance-the-default-image-viewer) for desktop registration details.
+See [Linux source-install verification](development.md#linux-source-install-verification) for association checks and the install/uninstall smoke recipe. See [default-viewer setup](usage.md#making-glance-the-default-image-viewer) for desktop registration details.

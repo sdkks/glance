@@ -1,6 +1,10 @@
-# Packaging and releases
+# Packaging
 
-Build, verification and release instructions for maintainers. For installation and first launch, see [Installing Glance](installing.md). See [Development](development.md) for local quality checks.
+Artifact construction and distribution notices. For installation and first launch,
+see [Installing Glance](installing.md). See [Contributing](../CONTRIBUTING.md)
+for contributor setup, [Development](development.md#verifying-artifacts-and-installs)
+for artifact and install verification, and [Releasing Glance](releasing.md) for
+the maintainer-only release runbook.
 
 ## Native AVIF release payload (macOS)
 
@@ -86,151 +90,6 @@ libvmaf/libheif dependencies, and run the real AVIF smoke with package-manager
 codec paths unavailable. Translate the macOS stage contract to the chosen Linux
 archive layout; do not ship this macOS payload or silently use system codecs.
 That path and Linux measurements are outstanding, not claimed working here.
-
-## Linux source-install verification
-
-For a repeatable, display-free association check from Linux or macOS, run:
-
-```sh
-make check-linux-associations
-```
-
-This needs **podman and network access** to fetch Ubuntu 24.04 and install
-`xdg-utils`, `desktop-file-utils`, and GLib command-line tools. It streams the
-committed desktop entry into a disposable container (no host installation or
-association changes), validates it, checks PNG/GIF defaults in `mimeapps.list`,
-reads them back with `xdg-mime` and `gio mime`, and uses `gio launch` to assert
-that `Exec` passes the file path as one argument to a logging shim. It does not
-use `xdg-open`, which needs a desktop session. If a built native executable in
-`target/{release,debug}` or a native Linux AppImage in `build/` exists, it also
-checks real `file://` argument decoding via `GLANCE_SMOKE_IMAGE=1` on the host;
-otherwise that sub-check prints SKIP. Missing podman skips the whole check;
-assertion failures exit nonzero. This networked check is not part of `make verify`.
-Real menu/icon discovery and graphical desktop behavior still need the manual
-Linux checks below.
-
-Real Linux menu/icon discovery, associations, native dependencies, and cache
-refresh have not yet been verified on the macOS development machine. On Linux, run:
-
-```sh
-make verify && make audit && make machete
-sh scripts/test-install-linux.sh  # scratch-prefix install/uninstall isolation test
-make install-linux DRY_RUN=1
-make install-linux
-command -v glance
-ldd "$HOME/.local/bin/glance"
-desktop-file-validate "$HOME/.local/share/applications/glance.desktop" # if available
-# Log out/in if needed; launch Glance from the menu and use Open With on a PNG.
-# Confirm the icon and image opening; this does not change your default viewer.
-make uninstall-linux
-```
-
-For the standalone scratch test, `scratch=$(mktemp -d)` then
-`scratch=$(cd "$scratch" && pwd -P)`,
-`make install-linux PREFIX="$scratch/prefix"` and
-`make uninstall-linux PREFIX="$scratch/prefix"` stage nothing in your home.
-The automated script additionally checks unrelated sentinel files, modification
-refusal on uninstall and reinstall, unchanged reinstall, a missing manifest,
-dry-run, system-prefix guards, and DESTDIR staging with symlink-ancestor refusal.
-It prints its temporary path and the exact file lists and retains the scratch
-directory for inspection. The macOS scratch binary is not a Linux executable.
-
-## Releasing
-
-`Cargo.toml`'s `[package] version` is the single source of truth. These local
-commands never push, publish crates, or create a GitHub Release:
-
-```sh
-make version
-make bump-version BUMP=patch  # also minor or major; patch is the default
-# Alternatively: make bump-version VERSION=0.2.0 (not together with BUMP)
-git diff -- Cargo.toml Cargo.lock CHANGELOG.md
-make release VERSION=0.1.1   # use the version you just reviewed; no second bump
-# Review the release commit and annotated tag, then push explicitly:
-git push origin <branch> v0.1.1
-```
-
-For a one-shot release, `make release BUMP=patch` bumps, commits exactly
-`Cargo.toml`, `Cargo.lock`, and `CHANGELOG.md` with
-`chore(release): release vX.Y.Z`, and creates the annotated `vX.Y.Z` tag.
-It refuses unrelated tracked changes, detached HEAD, an existing tag, or an
-unchanged release file. Bumps refresh the lockfile offline without rebuilding;
-they require the pinned Rust toolchain and cached dependency metadata.
-Notes under `[Unreleased]` become a UTC-dated release with a fresh empty
-`[Unreleased]` section above. Explicit `VERSION` retries do not duplicate notes.
-Failed bumps restore all three files; failed release commits or tag creation
-restore those files and the original index, rolling back the local release commit
-if needed. Do not run concurrent Git operations during release.
-
-Release notes use the tag's `## [X.Y.Z]` body from `CHANGELOG.md` at the tagged commit.
-Missing or empty sections fall back to the embedded summary; reruns refresh notes.
-
-Pushing the reviewed branch and `vX.Y.Z` tag starts `.github/workflows/release.yml`:
-**gate → package → publish**. Gates run on `ubuntu-26.04` and `macos-26`;
-the publish job runs on `ubuntu-26.04`. Both gates must pass
-`make verify`, `make audit`, and `make machete` before either packaging job
-starts. Both packages must succeed before the release is created/updated with
-`GITHUB_TOKEN`. Before any asset replacement, an existing public release is
-converted to a draft; a new release is created as a draft only after a confirmed
-`release not found` result from the JSON-mode lookup. Other lookup errors abort
-without creating a release or changing existing assets or visibility. Rerunning a tag
-replaces assets with `--clobber`. The release becomes public only after all
-uploads succeed and their exact names and byte sizes match the candidate set
-(including rejection of extra assets). A failed upload or verification leaves
-the release hidden as a draft, even if it was previously public, until a
-successful rerun or manual un-draft. Manual un-draft bypasses this verification
-and can expose an incomplete asset set.
-No crates.io publishing,
-Developer ID signing, or notarization is performed. Ordinary pushes to `main`
-and pull requests run the same gates in `.github/workflows/ci.yml`.
-
-Gate runners install distro/Homebrew development libraries. AVIF tests run only
-where libavif ≥1.4.2 and dav1d ≥1.5.4 are available; older native packages
-correctly disable AVIF there. Packaging independently builds checksum-pinned
-native decoders, bundles them, and requires the existing AVIF smoke checks.
-
-Release attachments are compressed, never raw executables or `.app` trees:
-
-- macOS (Apple Silicon): `Glance-<version>-arm64.zip`, `.dmg`, and `.sha256`
-  (one checksum file covers both zip and DMG); plus
-  `Glance-<version>-macos-arm64-notices.tar.gz` and `-notices.sha256`.
-- Linux: `Glance-<version>-x86_64.AppImage` and `.AppImage.sha256` (native Ubuntu
-  24.04 runner deliberately retained for glibc compatibility; AppImage contains
-  compressed SquashFS); plus
-  `Glance-<version>-linux-<arch>.tar.gz` (portable AppRun payload and tagged
-  source for `make install-linux`), `Glance-<version>-linux-<arch>-notices.tar.gz`,
-  and `Glance-<version>-linux-<arch>.sha256` covering both tarballs.
-- Notices archives contain the complete notices also included inside the
-  application artifacts. Checksum entries use sibling basenames: download all
-  attachments into one directory before checking them.
-
-macOS support is **Apple Silicon (arm64)** only: there is no Intel build and no
-Universal binary, and the release `package` job refuses to run on a non-arm64
-runner. macOS artifacts are
-**unsigned by a verified developer** (ad-hoc signed only), so downloaded apps
-need the [Gatekeeper steps](installing.md#macos-releases): drag to Applications, then
-right-click → Open, or remove only the trusted app's quarantine attribute.
-The publish job summary lists each attachment's exact bytes and decimal MB,
-total upload size, and PASS/OVER against the <40 MB compressed-DMG target.
-Exceeding that target is reported, not hidden by dropping native AVIF.
-
-**Not yet verified until a real tag run:** runner availability of the pinned Rust and
-native versions/build tools, resulting artifact sizes, and GitHub release-write
-permissions. To exercise without publishing a production release, use a fork
-or dedicated test repository with Actions enabled and push this branch there.
-Choose an unused version, run the local bump/release commands above, and push
-its branch and tag to that test remote. In Actions, confirm both gate matrix
-entries finish before packaging starts, both packages finish before publish,
-and the Release contains only the named archives and checksum files. Download
-all attachments into one directory and run
-`for checksum in *.sha256; do sha256sum -c "$checksum" || break; done` on Linux
-(or substitute `shasum -a 256 -c "$checksum"` on macOS); inspect the publish size summary.
-Follow the platform packaging smoke recipes below on downloaded assets.
-For a negative check on the test repository, create another unused release
-version on a scratch branch, deliberately add a failing Rust test before
-cutting its tag, and push that scratch branch/tag: the gate must fail, package
-and publish must be skipped, and no release/assets must be created for that tag.
-Do not move an existing production tag to perform these checks.
 
 ## Packaging (macOS)
 
@@ -467,8 +326,9 @@ The AppImage deliberately uses the system's glibc/libgcc, X11/Wayland, Vulkan/
 Mesa drivers, fonts and desktop services; it does not bundle GPU drivers or a
 whole Linux distribution. The Linux AppImage deliberately builds on the
 `ubuntu-24.04` baseline for glibc compatibility, not arbitrary older Linux;
-`ubuntu-26.04` would raise the glibc floor from 2.39 to 2.43. CI/release gates
-use `ubuntu-26.04` and `macos-26`, and publication uses `ubuntu-26.04`. Normal AppImage mounting needs working FUSE (`/dev/fuse`). Older runtimes
+`ubuntu-26.04` would raise the glibc floor from 2.39 to 2.43. See
+[Releasing Glance](releasing.md#releasing) for CI/release gates and publication.
+Normal AppImage mounting needs working FUSE (`/dev/fuse`). Older runtimes
 may require `libfuse2` (`libfuse2t64` on Ubuntu 24.04); this pinned runtime embeds
 libfuse, so that package is not normally required. In containers or without
 FUSE, use `--appimage-extract-and-run` or extract and run `squashfs-root/AppRun`.
@@ -476,46 +336,8 @@ AppImage desktop integration is not automatic: register it with your desktop's
 AppImage integration tool or choose it via **Open With**. The embedded desktop
 entry is metadata, not an installation into your host's application database.
 
-### Linux verification recipe
-
-On a native Linux host after `make appimage`:
-
-```sh
-image="$PWD/build/Glance-0.1.0-$(uname -m).AppImage" # adapt the Cargo version
-fixture="$PWD/assets/test/web/alpha8.avif"
-mkdir -p build/appimage-check
-cd build/appimage-check
-"$image" --appimage-extract
-GLANCE_SMOKE_IMAGE=1 "$image" --appimage-extract-and-run "$fixture"
-GLANCE_SMOKE_IMAGE=1 squashfs-root/AppRun "$fixture"
-ldd squashfs-root/usr/bin/glance
-ldd squashfs-root/usr/lib/libavif.so.16
-ldd squashfs-root/usr/lib/libdav1d.so.7
-# libavif/dav1d must resolve INSIDE squashfs-root, never /usr/lib or /opt.
-desktop-file-validate squashfs-root/usr/share/applications/glance.desktop
-find squashfs-root/usr/share/icons/hicolor -name glance.png
-```
-
-Both smoke invocations must print `decoded 5x3`. The diagnostic uses the real
-bounded decoder and exits before creating a GUI; it is not a visual desktop test.
-For container verification, mount this checkout and run the same commands:
-
-```sh
-podman run --rm -v "$PWD:/src:Z" -w /src ubuntu:24.04 bash
-# Inside: install the prerequisites above, install Rust 1.97.1, make appimage,
-# then execute the extraction/ldd/desktop checks (no FUSE needed).
-```
-
-Executed here on Podman 6.0.0's native arm64 VM / Ubuntu 24.04: source-native
-build, AppImage extraction and extract-and-run AVIF decode, decoder-only closure,
-and desktop/icon layout. **Not yet verified**: x86_64 runtime/build, real Ubuntu desktop
-launch, file-manager Open With, folder-wide next/previous and GPU/driver behavior.
-On a stock Ubuntu desktop run `./Glance-<version>-<arch>.AppImage <file>`, open a
-folder, use Left/Right and Home/End, and open an image via the file manager;
-confirm the icon, title/count, neighboring files and AVIF rendering.
-
-EXR/Radiance HDR, PQ/HLG, XCF, AVIF/JXL sequences and Windows remain unsupported;
-packaging does not enable those formats or HDR output.
+For extraction, decoder checks and desktop verification, see the
+[Linux verification recipe](development.md#linux-verification-recipe).
 
 ## Licensing
 

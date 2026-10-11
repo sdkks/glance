@@ -162,16 +162,19 @@ See [formats and color handling](docs/formats.md) for the full tables,
 Large files can hit encoded-input, decoded-image or rendering limits.
 Platform desktop behavior and older-OS compatibility still have validation gaps.
 See [Rendering and limits](docs/rendering.md) and the platform verification
-recipes in [Packaging and releases](docs/packaging.md).
+recipes in [Development](docs/development.md#verifying-artifacts-and-installs).
 
 ## Documentation
+
+- [Contributing](CONTRIBUTING.md) — local setup, checks, pull requests and bug reports.
 
 - [Installing Glance](docs/installing.md) — downloads, first launch and source builds.
 - [Using Glance](docs/usage.md) — controls, playback, settings and desktop actions.
 - [Supported formats and color](docs/formats.md) — formats, depth and codec caveats.
 - [Rendering and limits](docs/rendering.md) — full detail, minification and resource bounds.
 - [Development](docs/development.md) — quality gates, audits, hooks and icons.
-- [Packaging and releases](docs/packaging.md) — artifacts, notices, CI and release steps.
+- [Packaging](docs/packaging.md) — artifact construction and distribution notices.
+- [Releasing Glance](docs/releasing.md) — maintainer-only versioning, CI and release steps.
 
 ## License
 

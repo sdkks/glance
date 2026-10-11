@@ -1,6 +1,9 @@
 # Development
 
-Contributor tools and quality checks. See [Installing Glance](installing.md#building-from-source) for prerequisites and [Packaging and releases](packaging.md) for distribution builds.
+Contributor tools and quality checks. Start with [Contributing](../CONTRIBUTING.md).
+See [Installing Glance](installing.md#building-from-source) for prerequisites,
+[Packaging](packaging.md) for distribution builds, and
+[Releasing Glance](releasing.md) for the maintainer-only release runbook.
 
 ## Development and quality gates
 
@@ -140,3 +143,100 @@ is ImageMagick, e.g. `magick assets/icon/glance-icon-master.png -resize
 That alternative is not a project dependency, has not been validated here, and
 need not match sips bytes; `.icns` regeneration still requires macOS.
 See [THIRD_PARTY.md](../THIRD_PARTY.md) for the human-supplied artwork provenance.
+
+## Verifying artifacts and installs
+
+For artifact construction and the macOS smoke command, see [Packaging](packaging.md).
+The Linux AppImage recipe below uses the prerequisites in
+[Linux AppImage packaging](packaging.md#linux-appimage-packaging).
+
+### Linux source-install verification
+
+For a repeatable, display-free association check from Linux or macOS, run:
+
+```sh
+make check-linux-associations
+```
+
+This needs **podman and network access** to fetch Ubuntu 24.04 and install
+`xdg-utils`, `desktop-file-utils`, and GLib command-line tools. It streams the
+committed desktop entry into a disposable container (no host installation or
+association changes), validates it, checks PNG/GIF defaults in `mimeapps.list`,
+reads them back with `xdg-mime` and `gio mime`, and uses `gio launch` to assert
+that `Exec` passes the file path as one argument to a logging shim. It does not
+use `xdg-open`, which needs a desktop session. If a built native executable in
+`target/{release,debug}` or a native Linux AppImage in `build/` exists, it also
+checks real `file://` argument decoding via `GLANCE_SMOKE_IMAGE=1` on the host;
+otherwise that sub-check prints SKIP. Missing podman skips the whole check;
+assertion failures exit nonzero. This networked check is not part of `make verify`.
+Real menu/icon discovery and graphical desktop behavior still need the manual
+Linux checks below.
+
+Real Linux menu/icon discovery, associations, native dependencies, and cache
+refresh have not yet been verified on the macOS development machine. On Linux, run:
+
+```sh
+make verify && make audit && make machete
+sh scripts/test-install-linux.sh  # scratch-prefix install/uninstall isolation test
+make install-linux DRY_RUN=1
+make install-linux
+command -v glance
+ldd "$HOME/.local/bin/glance"
+desktop-file-validate "$HOME/.local/share/applications/glance.desktop" # if available
+# Log out/in if needed; launch Glance from the menu and use Open With on a PNG.
+# Confirm the icon and image opening; this does not change your default viewer.
+make uninstall-linux
+```
+
+For the standalone scratch test, `scratch=$(mktemp -d)` then
+`scratch=$(cd "$scratch" && pwd -P)`,
+`make install-linux PREFIX="$scratch/prefix"` and
+`make uninstall-linux PREFIX="$scratch/prefix"` stage nothing in your home.
+The automated script additionally checks unrelated sentinel files, modification
+refusal on uninstall and reinstall, unchanged reinstall, a missing manifest,
+dry-run, system-prefix guards, and DESTDIR staging with symlink-ancestor refusal.
+It prints its temporary path and the exact file lists and retains the scratch
+directory for inspection. The macOS scratch binary is not a Linux executable.
+
+### Linux verification recipe
+
+On a native Linux host after `make appimage`:
+
+```sh
+image="$PWD/build/Glance-0.1.0-$(uname -m).AppImage" # adapt the Cargo version
+fixture="$PWD/assets/test/web/alpha8.avif"
+mkdir -p build/appimage-check
+cd build/appimage-check
+"$image" --appimage-extract
+GLANCE_SMOKE_IMAGE=1 "$image" --appimage-extract-and-run "$fixture"
+GLANCE_SMOKE_IMAGE=1 squashfs-root/AppRun "$fixture"
+ldd squashfs-root/usr/bin/glance
+ldd squashfs-root/usr/lib/libavif.so.16
+ldd squashfs-root/usr/lib/libdav1d.so.7
+# libavif/dav1d must resolve INSIDE squashfs-root, never /usr/lib or /opt.
+desktop-file-validate squashfs-root/usr/share/applications/glance.desktop
+find squashfs-root/usr/share/icons/hicolor -name glance.png
+```
+
+Both smoke invocations must print `decoded 5x3`. The diagnostic uses the real
+bounded decoder and exits before creating a GUI; it is not a visual desktop test.
+For container verification, mount this checkout and run the same commands.
+The comment's prerequisites are the ones in
+[Linux AppImage packaging](packaging.md#linux-appimage-packaging):
+
+```sh
+podman run --rm -v "$PWD:/src:Z" -w /src ubuntu:24.04 bash
+# Inside: install the prerequisites above, install Rust 1.97.1, make appimage,
+# then execute the extraction/ldd/desktop checks (no FUSE needed).
+```
+
+Executed here on Podman 6.0.0's native arm64 VM / Ubuntu 24.04: source-native
+build, AppImage extraction and extract-and-run AVIF decode, decoder-only closure,
+and desktop/icon layout. **Not yet verified**: x86_64 runtime/build, real Ubuntu desktop
+launch, file-manager Open With, folder-wide next/previous and GPU/driver behavior.
+On a stock Ubuntu desktop run `./Glance-<version>-<arch>.AppImage <file>`, open a
+folder, use Left/Right and Home/End, and open an image via the file manager;
+confirm the icon, title/count, neighboring files and AVIF rendering.
+
+EXR/Radiance HDR, PQ/HLG, XCF, AVIF/JXL sequences and Windows remain unsupported;
+packaging does not enable those formats or HDR output.
