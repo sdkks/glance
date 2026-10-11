@@ -12,8 +12,11 @@ Rust implementation under its own MIT license.
 
 Core features:
 - Minimalist and high performance
+- Broad format coverage: AVIF, JPEG XL, SVG, TIFF, animated GIF/APNG/WebP, and flattened PSD/Krita/OpenRaster
+- ICC color management normalizing 10/12-bit and HDR (PQ/HLG) input to sRGB
 - Preloads next image in line, configurable depth
 - Convenient navigation/rotation shortcuts
+- Multiple independent windows with a configurable "open new files in" policy
 - Pure Rust with some libavif interop.
 
 ## Demo
