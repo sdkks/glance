@@ -6,10 +6,39 @@ use std::{
     sync::atomic::{AtomicU64, Ordering},
 };
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum OpenNewFiles {
+    #[default]
+    CurrentWindow,
+    NewWindow,
+}
+
+impl OpenNewFiles {
+    pub const ALL: [(Self, &str); 2] = [
+        (Self::CurrentWindow, "Current window"),
+        (Self::NewWindow, "New window"),
+    ];
+
+    fn parse(key: &str) -> Self {
+        match key {
+            "new-window" => Self::NewWindow,
+            _ => Self::CurrentWindow,
+        }
+    }
+
+    fn key(self) -> &'static str {
+        match self {
+            Self::CurrentWindow => "current-window",
+            Self::NewWindow => "new-window",
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Settings {
     pub preload_depth: usize,
     pub animation_rate: crate::animation::Rate,
+    pub open_new_files: OpenNewFiles,
 }
 
 impl Default for Settings {
@@ -17,6 +46,7 @@ impl Default for Settings {
         Self {
             preload_depth: 1,
             animation_rate: Default::default(),
+            open_new_files: Default::default(),
         }
     }
 }
@@ -35,14 +65,19 @@ impl Settings {
             .get("animation-rate")
             .and_then(|value| value.as_str())
             .map_or(Default::default(), crate::animation::Rate::parse);
+        settings.open_new_files = document
+            .get("open-new-files-in")
+            .and_then(|value| value.as_str())
+            .map_or(Default::default(), OpenNewFiles::parse);
         Ok(settings)
     }
 
     fn text(self) -> String {
         format!(
-            "preload-depth = {}\nanimation-rate = \"{}\"\n",
+            "preload-depth = {}\nanimation-rate = \"{}\"\nopen-new-files-in = \"{}\"\n",
             self.preload_depth,
-            self.animation_rate.key()
+            self.animation_rate.key(),
+            self.open_new_files.key()
         )
     }
 }
@@ -164,6 +199,60 @@ mod tests {
     use crate::folder::tests::TempDir;
 
     #[test]
+    fn open_policy_roundtrips_and_missing_key_preserves_current_window_default() {
+        let dir = TempDir::new();
+        let path = dir.0.join("settings.toml");
+        for (open_new_files, _) in OpenNewFiles::ALL {
+            let settings = Settings {
+                preload_depth: 3,
+                animation_rate: crate::animation::Rate::Fps10,
+                open_new_files,
+            };
+            let mut store = Store {
+                path: Some(path.clone()),
+            };
+            store.save(settings);
+            assert_eq!(Store::load_at(Some(path.clone())).0, settings);
+            assert!(
+                fs::read_to_string(&path)
+                    .unwrap()
+                    .contains(open_new_files.key())
+            );
+        }
+        fs::write(&path, "preload-depth = 4\nanimation-rate = 'exact'\n").unwrap();
+        assert_eq!(
+            Store::load_at(Some(path)).0,
+            Settings {
+                preload_depth: 4,
+                animation_rate: crate::animation::Rate::Exact,
+                open_new_files: OpenNewFiles::CurrentWindow,
+            }
+        );
+        assert_eq!(
+            Settings::parse("").unwrap().open_new_files,
+            OpenNewFiles::CurrentWindow
+        );
+    }
+
+    #[test]
+    fn invalid_open_policy_uses_default_without_resetting_other_preferences() {
+        for value in ["'future'", "'NEW-WINDOW'", "42", "false", "[]", "{}"] {
+            let settings = Settings::parse(&format!(
+                "preload-depth = 4\nanimation-rate = 'exact'\nopen-new-files-in = {value}\n"
+            ))
+            .unwrap();
+            assert_eq!(
+                settings,
+                Settings {
+                    preload_depth: 4,
+                    animation_rate: crate::animation::Rate::Exact,
+                    open_new_files: OpenNewFiles::CurrentWindow,
+                }
+            );
+        }
+    }
+
+    #[test]
     fn animation_rates_roundtrip_and_invalid_values_preserve_depth() {
         let dir = TempDir::new();
         let path = dir.0.join("settings.toml");
@@ -171,6 +260,7 @@ mod tests {
             let settings = Settings {
                 preload_depth: 3,
                 animation_rate,
+                ..Default::default()
             };
             let mut store = Store {
                 path: Some(path.clone()),

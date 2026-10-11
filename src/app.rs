@@ -100,6 +100,7 @@ enum Command {
     NextFrame,
     Depth(usize),
     Rate(crate::animation::Rate),
+    OpenPolicy(crate::settings::OpenNewFiles),
     Open,
     Navigate(Direction),
     Sort(Sort),
@@ -1070,6 +1071,9 @@ impl Viewer {
                 );
             });
             ui.separator();
+            ui.menu_button("Open new files in", |ui| {
+                open_policy_menu(ui, self.settings.open_new_files, command);
+            });
             ui.menu_button("Animation rate", |ui| {
                 animation_rate_menu(ui, self.settings.animation_rate, command);
             });
@@ -1175,6 +1179,19 @@ fn animation_rate_menu(
     }
 }
 
+fn open_policy_menu(
+    ui: &mut egui::Ui,
+    active: crate::settings::OpenNewFiles,
+    command: &mut Option<Command>,
+) {
+    for (policy, label) in crate::settings::OpenNewFiles::ALL {
+        if ui.radio(active == policy, label).clicked() {
+            *command = Some(Command::OpenPolicy(policy));
+            ui.close();
+        }
+    }
+}
+
 fn menu_command(ui: &mut egui::Ui, label: &str, action: Command, command: &mut Option<Command>) {
     if ui.button(label).clicked() {
         *command = Some(action);
@@ -1184,6 +1201,7 @@ fn menu_command(ui: &mut egui::Ui, label: &str, action: Command, command: &mut O
 
 impl Viewer {
     pub(crate) fn sync_settings(&mut self, settings: crate::settings::Settings) {
+        self.settings.open_new_files = settings.open_new_files;
         self.set_animation_rate(settings.animation_rate);
         if self.settings.preload_depth != settings.preload_depth {
             self.settings.preload_depth = settings.preload_depth;
@@ -1532,6 +1550,11 @@ impl Viewer {
                     self.stop_prefetch();
                 }
             }
+            Some(Command::OpenPolicy(policy)) => {
+                self.settings.open_new_files = policy;
+                shared.settings = self.settings;
+                shared.store.save(shared.settings);
+            }
             Some(Command::Rate(rate)) => {
                 self.set_animation_rate(rate);
                 shared.settings = self.settings;
@@ -1642,11 +1665,20 @@ mod tests {
         assert!(second.action_error.is_none());
         shared.settings.preload_depth = 3;
         shared.settings.animation_rate = crate::animation::Rate::Fps10;
+        shared.settings.open_new_files = crate::settings::OpenNewFiles::NewWindow;
         shared.store.save(shared.settings);
         first.sync_settings(shared.settings);
         second.sync_settings(shared.settings);
         assert_eq!(first.cache.depth, 3);
         assert_eq!(second.cache.depth, 3);
+        assert_eq!(
+            first.settings.open_new_files,
+            shared.settings.open_new_files
+        );
+        assert_eq!(
+            second.settings.open_new_files,
+            shared.settings.open_new_files
+        );
         assert_eq!(first.selected, Some(first_path));
         assert_eq!(second.selected, Some(second_path));
         assert_ne!(first.view.transform, second.view.transform);
@@ -1701,6 +1733,38 @@ mod tests {
                     "Glance 0.1.0\nCommit: unknown"
                 );
             }
+        }
+    }
+
+    #[test]
+    fn open_policy_menu_selects_both_options_via_keyboard() {
+        use crate::settings::OpenNewFiles;
+        assert_eq!(
+            OpenNewFiles::ALL,
+            [
+                (OpenNewFiles::CurrentWindow, "Current window"),
+                (OpenNewFiles::NewWindow, "New window"),
+            ]
+        );
+        for (index, (policy, _)) in OpenNewFiles::ALL.into_iter().enumerate() {
+            let ctx = egui::Context::default();
+            let mut command = None;
+            let mut keys = vec![None];
+            keys.extend(std::iter::repeat_n(Some(Key::Tab), index + 1));
+            keys.push(Some(Key::Enter));
+            for key in keys {
+                let mut output = ctx.run_ui(
+                    egui::RawInput {
+                        events: key
+                            .map(|key| vec![key_event(key, false)])
+                            .unwrap_or_default(),
+                        ..Default::default()
+                    },
+                    |ui| open_policy_menu(ui, OpenNewFiles::CurrentWindow, &mut command),
+                );
+                output.textures_delta.clear();
+            }
+            assert!(matches!(command, Some(Command::OpenPolicy(selected)) if selected == policy));
         }
     }
 

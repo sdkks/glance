@@ -8,6 +8,10 @@ and versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- Add `Settings ▸ Open new files in` with persisted `Current window` (default) and
+  opt-in `New window` choices for incoming documents. A multi-file open request
+  opens only its first document, in one window.
+
 - Add `File ▸ New Window` for independent image windows, each with its own folder
   position, zoom, pan and playback. `⌘W` closes the focused window; `⌘Q` quits all
   windows, and closing the last window quits Glance.

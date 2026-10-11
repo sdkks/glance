@@ -13,6 +13,32 @@ use std::{collections::HashMap, path::PathBuf, sync::Arc};
 use eframe::egui::{self, ViewportId};
 
 use crate::app::{Shared, Viewer};
+#[cfg(any(target_os = "macos", test))]
+use crate::settings::OpenNewFiles;
+
+#[cfg(any(target_os = "macos", test))]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum OpenRoute {
+    Current(ViewportId),
+    New,
+}
+
+// A delivered batch opens only its first document in either mode. New-window
+// policy creates exactly one window, even for a file already shown elsewhere.
+// No unambiguous current target means defer, just as before.
+#[cfg(any(target_os = "macos", test))]
+fn route_document(
+    policy: OpenNewFiles,
+    target: Option<ViewportId>,
+    documents: impl IntoIterator<Item = PathBuf>,
+) -> Option<(OpenRoute, PathBuf)> {
+    let path = documents.into_iter().next()?;
+    let route = match policy {
+        OpenNewFiles::CurrentWindow => OpenRoute::Current(target?),
+        OpenNewFiles::NewWindow => OpenRoute::New,
+    };
+    Some((route, path))
+}
 
 #[derive(Default)]
 pub(crate) struct Action {
@@ -26,6 +52,7 @@ struct Registry<T> {
     // Creation order keeps rendering and existing-document ownership deterministic.
     order: Vec<ViewportId>,
     focused: Option<ViewportId>,
+    focus_order: Vec<ViewportId>,
     next: u64,
 }
 
@@ -35,6 +62,7 @@ impl<T> Registry<T> {
             windows: HashMap::from([(ViewportId::ROOT, root)]),
             order: vec![ViewportId::ROOT],
             focused: Some(ViewportId::ROOT),
+            focus_order: vec![ViewportId::ROOT],
             next: 0,
         }
     }
@@ -53,12 +81,15 @@ impl<T> Registry<T> {
     fn focus(&mut self, id: ViewportId) {
         if self.windows.contains_key(&id) {
             self.focused = Some(id);
+            self.focus_order.retain(|existing| *existing != id);
+            self.focus_order.push(id);
         }
     }
 
     fn close(&mut self, id: ViewportId) -> bool {
         self.windows.remove(&id);
         self.order.retain(|existing| *existing != id);
+        self.focus_order.retain(|existing| *existing != id);
         if self.focused == Some(id) {
             self.focused = None;
         }
@@ -67,8 +98,12 @@ impl<T> Registry<T> {
 
     #[cfg(any(target_os = "macos", test))]
     fn target(&self) -> Option<ViewportId> {
+        // `focused` is retained on app deactivation: use the last known focus.
+        // After it closes, fall back to the most recently focused live window,
+        // then the sole window. Never guess among multiple never-focused windows.
         self.focused
             .filter(|id| self.windows.contains_key(id))
+            .or_else(|| self.focus_order.last().copied())
             .or_else(|| (self.order.len() == 1).then(|| self.order[0]))
     }
 
@@ -212,23 +247,42 @@ impl eframe::App for Application {
             if let Some(path) = crate::open_documents::drain(None) {
                 self.pending_open = Some(path);
             }
-            if let Some(path) = self.pending_open.as_ref()
-                && let Some(id) = self
+            if let Some(path) = self.pending_open.as_ref() {
+                let target = self
                     .registry
-                    .open_target(|viewer| viewer.selected.as_ref() == Some(path))
-            {
-                let viewer = self
-                    .registry
-                    .windows
-                    .get_mut(&id)
-                    .expect("live open target");
-                let path = self
-                    .pending_open
-                    .take()
-                    .expect("pending open checked above");
-                if viewer.selected.as_ref() != Some(&path) {
-                    crate::open_documents::trace_open(&path);
-                    viewer.open(path);
+                    .open_target(|viewer| viewer.selected.as_ref() == Some(path));
+                if let Some((route, path)) = route_document(
+                    self.shared.settings.open_new_files,
+                    target,
+                    std::iter::once(path.clone()),
+                ) {
+                    self.pending_open = None;
+                    match route {
+                        OpenRoute::Current(id) => {
+                            let viewer = self
+                                .registry
+                                .windows
+                                .get_mut(&id)
+                                .expect("live open target");
+                            if viewer.selected.as_ref() != Some(&path) {
+                                crate::open_documents::trace_open(&path);
+                                // Preserve the same folder/selection/cache admission as before.
+                                viewer.open(path);
+                            }
+                        }
+                        OpenRoute::New => {
+                            crate::open_documents::trace_open(&path);
+                            let viewer = Viewer::new(
+                                ctx.clone(),
+                                self.render_state.clone(),
+                                Arc::clone(&self.uploads),
+                                self.shared.settings,
+                                Some(path),
+                            );
+                            self.registry.create(viewer);
+                            ctx.request_repaint_of(ViewportId::ROOT);
+                        }
+                    }
                 }
             }
         }
@@ -283,6 +337,68 @@ mod tests {
     use super::*;
 
     #[test]
+    fn routing_matrix_covers_policy_targets_and_single_or_multiple_documents() {
+        for (policy, _) in OpenNewFiles::ALL {
+            for state in 0..4 {
+                let mut registry = Registry::new("root.png");
+                let child = registry.create("child.png");
+                match state {
+                    0 => registry.focus(child), // Focused child.
+                    1 => {} // Unfocused app retains its last-known (root) focus.
+                    2 => {
+                        // Sole live window, never focused.
+                        registry.close(ViewportId::ROOT);
+                    }
+                    3 => {
+                        // Multiple windows, no live focus history: defer current.
+                        registry.close(ViewportId::ROOT);
+                        registry.create("other.png");
+                    }
+                    _ => unreachable!(),
+                }
+                let target = registry.open_target(|path| *path == "new.png");
+                let expected = match state {
+                    0 | 2 => Some(child),
+                    1 => Some(ViewportId::ROOT),
+                    _ => None,
+                };
+                assert_eq!(target, expected);
+                for count in [0, 1, 3] {
+                    let documents: Vec<PathBuf> =
+                        (0..count).map(|n| format!("{n}.png").into()).collect();
+                    let route = route_document(policy, target, documents);
+                    let expected_route = match (count, policy) {
+                        (0, _) => None,
+                        (_, OpenNewFiles::NewWindow) => Some((OpenRoute::New, "0.png".into())),
+                        (_, OpenNewFiles::CurrentWindow) => {
+                            expected.map(|id| (OpenRoute::Current(id), "0.png".into()))
+                        }
+                    };
+                    assert_eq!(
+                        route, expected_route,
+                        "policy={policy:?}, state={state}, count={count}"
+                    );
+                    assert_eq!(registry.windows[&child], "child.png");
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn new_policy_does_not_reuse_same_file_owner_and_current_does() {
+        let registry = Registry::new("same.png");
+        let target = registry.open_target(|path| *path == "same.png");
+        assert_eq!(
+            route_document(OpenNewFiles::CurrentWindow, target, ["same.png".into()]),
+            Some((OpenRoute::Current(ViewportId::ROOT), "same.png".into()))
+        );
+        assert_eq!(
+            route_document(OpenNewFiles::NewWindow, target, ["same.png".into()]),
+            Some((OpenRoute::New, "same.png".into()))
+        );
+    }
+
+    #[test]
     fn create_focus_close_and_last_window_quit() {
         let mut registry = Registry::new("root");
         let first = registry.create("first");
@@ -315,14 +431,17 @@ mod tests {
         );
         assert_eq!(registry.open_target(|path| *path == "new.png"), Some(first));
         registry.close(first);
-        assert_eq!(registry.target(), None); // Two owners, no focus: don't guess.
+        assert_eq!(registry.target(), Some(second)); // Most recently focused survivor.
         assert_eq!(
             registry.open_target(|path| *path == "second.png"),
             Some(second)
         );
-        assert_eq!(registry.open_target(|path| *path == "new.png"), None);
+        assert_eq!(
+            registry.open_target(|path| *path == "new.png"),
+            Some(second)
+        );
         registry.focus(first); // Stale focus events cannot resurrect a closed window.
-        assert_eq!(registry.target(), None);
+        assert_eq!(registry.target(), Some(second));
         registry.close(second);
         assert_eq!(registry.target(), Some(ViewportId::ROOT));
     }
