@@ -2,7 +2,7 @@
 # Focused failure-path checks; real successful artifacts are covered by macos-smoke.
 set -eu
 cd "$(dirname "$0")/../.."
-[ "$(uname -s)" = Darwin ] || { echo 'macOS packaging checks require macOS.' >&2; exit 1; }
+[ "$(uname -s)" = Darwin ] || { echo 'SKIP: macOS packaging checks require macOS.'; exit 0; }
 work=$(mktemp -d /tmp/glance-macos-input-tests.XXXXXX)
 trap 'rm -rf "$work"' EXIT HUP INT TERM
 expect_failure() {

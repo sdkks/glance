@@ -669,7 +669,8 @@ smoke-tested on macOS arm64, not certified on Linux.
 | `check` | `cargo check --workspace --all-targets --locked` |
 | `clippy` | `cargo clippy --workspace --all-targets --locked -- -D warnings` |
 | `test` | `cargo test --workspace --locked` |
-| `verify` | Sequential, fail-fast fmt-check → check → clippy → test, even with `make -j` |
+| `test-scripts` | Hermetic packaging shell checks and notices tests; macOS freshness/input checks skip on other hosts, notices skip without Python 3.11+ |
+| `verify` | Sequential, fail-fast fmt-check → check → clippy → test → test-scripts, even with `make -j` |
 | `icons` | Rebuild derived icon files from committed masters using macOS `sips` + `iconutil` |
 | `install-hooks` | Opt in to tracked hooks using local `core.hooksPath = .githooks`; refuse conflicts |
 | `uninstall-hooks` | Clear local `core.hooksPath` only when exactly one value equals `.githooks` |
@@ -708,7 +709,7 @@ missing. Cargo and cargo-deny may populate local caches or fetch advisory data;
 audit results depend on the current advisory database and registry state.
 They are intentionally outside `verify` and the pre-commit hook: these opt-in,
 CI-tier dependency checks require extra tools and advisory/network access, while
-`verify` remains fmt-check → check → clippy → test.
+`verify` remains fmt-check → check → clippy → test → test-scripts.
 
 ### Opt-in pre-commit hook
 
@@ -992,9 +993,19 @@ remain unverified; Open/drop inside the window and CLI opening remain available.
 
 Native AVIF is bundled **by default**: `make macos-artifacts` runs `make
 bundle-avif` when `AVIF_STAGE` (default `build/bundle-libs`) does not exist,
-then `make notices` using that stage's native notices. An existing stage is an
-explicit reusable input; choose a fresh `AVIF_STAGE` after source/toolchain
-changes to rebuild it. Partial/missing stage inputs fail loudly, never silently
+then `make notices` using that stage's native notices. An existing stage is reused
+only if its executable is not older than the Rust sources, Cargo manifests/lockfile,
+`build.rs`, and embedded macOS icon. Newer inputs cause packaging to refuse the
+stage and print recovery commands. The default stage cannot be refreshed in
+place: the builder refuses to reuse a directory. Build into a new, empty path:
+
+```sh
+make bundle-avif AVIF_STAGE=build/avif-release-2
+make macos-artifacts AVIF_STAGE=build/avif-release-2
+```
+
+Choose a fresh `AVIF_STAGE` after toolchain changes too (timestamps do not detect
+those). Partial/missing stage inputs fail loudly, never silently
 produce an AVIF-less release. Direct `sh scripts/package-macos.sh [stage]`
 consumes an already prepared stage and notices; it does not prepare them.
 
@@ -1121,7 +1132,15 @@ make notices NOTICES_ARGS='--output build/notices-release --native-notices build
 # Offline test input only (normal release generation always obtains fresh metadata):
 python3 scripts/generate-notices.py --metadata /tmp/cargo-metadata.json --output build/notices-test
 python3 -m unittest discover -s scripts/tests -p 'test_notices.py'
+make test-scripts
 ```
+
+`make test-scripts` runs the portable macOS deployment-floor parser checks,
+macOS-only freshness and packaging-input checks, then the notices unit tests.
+The macOS-only checks print a skip note on other hosts; notices tests print a
+skip note when Python 3.11+ (`tomllib`) is unavailable. These hermetic checks
+need no native build, network access, or real system mutation and also run as
+the final step of `make verify`.
 
 EXR/HDR, PQ/HLG, XCF and AVIF/JXL sequences remain unsupported.
 
