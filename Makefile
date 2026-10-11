@@ -38,6 +38,7 @@ test:
 	cargo test --workspace --locked
 
 test-scripts:
+	sh scripts/tests/test-release-notes.sh
 	sh scripts/tests/test-macos-floor.sh
 	sh scripts/tests/test-macos-freshness.sh
 	sh scripts/tests/test-macos-inputs.sh

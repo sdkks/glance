@@ -891,6 +891,9 @@ Failed bumps restore all three files; failed release commits or tag creation
 restore those files and the original index, rolling back the local release commit
 if needed. Do not run concurrent Git operations during release.
 
+Release notes use the tag's `## [X.Y.Z]` body from `CHANGELOG.md` at the tagged commit.
+Missing or empty sections fall back to the embedded summary; reruns refresh notes.
+
 Pushing the reviewed branch and `vX.Y.Z` tag starts `.github/workflows/release.yml`:
 **gate → package → publish**. Both Ubuntu 24.04 and macOS gates must pass
 `make verify`, `make audit`, and `make machete` before either packaging job

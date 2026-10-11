@@ -156,6 +156,9 @@ jobs:
     permissions:
       contents: write
     steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
           pattern: release-*
@@ -189,6 +192,12 @@ jobs:
             done
             printf '\nTotal upload: %s bytes. DMG target: under 40 MB.\n' "$total"
           } >> "$GITHUB_STEP_SUMMARY"
+      - name: Prepare release notes from the tagged changelog or embedded fallback
+        env:
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          sh scripts/release-notes.sh CHANGELOG.md "$RELEASE_TAG" release-notes.md \
+            'Test-gated macOS and Linux artifacts with bundled decoder-only AVIF. macOS builds are ad-hoc signed, not Developer ID signed or notarized; see README for Gatekeeper instructions. EXR/HDR, PQ/HLG, XCF and AVIF/JXL sequences remain unsupported.'
       - name: Create or update GitHub Release and attach compressed assets
         env:
           GH_TOKEN: ${{ github.token }}
@@ -205,6 +214,7 @@ jobs:
               was_public=true
               gh release edit "$RELEASE_TAG" --draft
             fi
+            gh release edit "$RELEASE_TAG" --notes-file release-notes.md
           else
             if [[ "$(<"$lookup_err")" != 'release not found' ]]; then
               echo 'Release lookup failed; refusing to create or mutate a release.' >&2
@@ -212,7 +222,7 @@ jobs:
               exit 1
             fi
             gh release create "$RELEASE_TAG" --draft --verify-tag --title "Glance $RELEASE_TAG" \
-              --notes 'Test-gated macOS and Linux artifacts with bundled decoder-only AVIF. macOS builds are ad-hoc signed, not Developer ID signed or notarized; see README for Gatekeeper instructions. EXR/HDR, PQ/HLG, XCF and AVIF/JXL sequences remain unsupported.'
+              --notes-file release-notes.md
           fi
           echo "Replacing draft release assets (previously public: $was_public)"
           # Upload/verification failures leave the release hidden as a draft,
