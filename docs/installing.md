@@ -4,34 +4,102 @@ Installation and source-build instructions for macOS and Linux. For everyday con
 
 ## macOS releases
 
-Download the Apple Silicon DMG or zip from the [releases page](https://github.com/sdkks/glance/releases). macOS requires 11.0 or newer; there is no Intel or Universal build. Oldest-OS runtime compatibility has not been verified.
+Apple Silicon releases require macOS 11.0 or newer; there is no Intel or
+Universal build. Oldest-OS runtime compatibility has not been verified.
 
-To install from the DMG, double-click `Install Glance.command`. It quits a
-running Glance, preserves an existing copy in your Trash, installs the app in
-`/Applications`, removes its download quarantine flag, and launches it. If
-`/Applications` is not writable, it tells you and uses `~/Applications` instead.
-For a manual install (including the zip), drag `Glance.app` to Applications
-instead of running it from the disk image.
+### Recommended: download in Terminal
 
-These builds are self-signed (ad-hoc signed) and not notarized. The project does
-not have a paid Apple Developer ID, so macOS blocks a downloaded copy on first
-launch. Only bypass that block if you trust the download and have checked its
-source and checksum. Choose one of three routes:
+Use `gh` (GitHub CLI) or `curl` to download. CLI downloads are not quarantined,
+so no `xattr` command or System Settings workaround is needed. These builds
+are self-signed (ad-hoc signed) and not notarized because the project has no
+paid Apple Developer ID. Only install a download you trust; check its source
+and checksum first. Quit Glance before replacing an existing installation.
+The commands below require write access to `/Applications`.
 
-1. Use the bundled `Install Glance.command` helper described above.
-2. After copying the app to Applications, try opening it, then go to
-   **System Settings → Privacy & Security → Open Anyway** and confirm the prompt.
-3. After copying the app to Applications, remove its download quarantine flag
-   in Terminal, then open the installed app normally:
+With `gh` installed (no GitHub account or sign-in is needed to download from
+this public repository), download the latest release (no tag needed)
+in a fresh directory, verify the DMG, then install and open it:
+
+```sh
+mkdir -p ~/Downloads/glance-install
+cd ~/Downloads/glance-install
+gh release download --repo sdkks/glance --pattern 'Glance-*-arm64.dmg' --pattern 'Glance-*-arm64.sha256'
+grep -E 'Glance-.*-arm64\.dmg$' Glance-*-arm64.sha256 | shasum -a 256 -c -
+# Continue only if the checksum reports OK.
+mkdir glance-volume
+hdiutil attach Glance-*-arm64.dmg -mountpoint "$PWD/glance-volume"
+ditto glance-volume/Glance.app /Applications/Glance.app
+hdiutil detach "$PWD/glance-volume"
+open /Applications/Glance.app
+```
+
+Use a new directory for each download to avoid mixing release versions.
+The `.sha256` file lists **both the zip and DMG**: running
+`shasum -a 256 -c Glance-*-arm64.sha256` requires both files in that directory.
+The `grep` command above selects only the DMG line. A checksum mismatch or a
+missing file means stop and check the download before installing.
+
+For the zip variant, start in another fresh directory:
+
+```sh
+gh release download --repo sdkks/glance --pattern 'Glance-*-arm64.zip' --pattern 'Glance-*-arm64.sha256'
+grep -E 'Glance-.*-arm64\.zip$' Glance-*-arm64.sha256 | shasum -a 256 -c -
+# Continue only if the checksum reports OK.
+ditto -x -k Glance-*-arm64.zip extracted
+ditto extracted/Glance.app /Applications/Glance.app
+open /Applications/Glance.app
+```
+
+The zip contains `Glance.app` at the top level; extracting into `extracted`
+keeps it separate from other downloads.
+
+If you prefer `curl`, copy the asset URLs from the
+[releases page](https://github.com/sdkks/glance/releases). Asset names include
+the version, so a latest-release URL alone is not enough. For the current
+release, **0.1.3**, run these commands in a fresh directory, then use the DMG
+verification and installation commands above:
+
+```sh
+curl -fL -O https://github.com/sdkks/glance/releases/download/v0.1.3/Glance-0.1.3-arm64.dmg
+curl -fL -O https://github.com/sdkks/glance/releases/download/v0.1.3/Glance-0.1.3-arm64.sha256
+grep -E 'Glance-.*-arm64\.dmg$' Glance-*-arm64.sha256 | shasum -a 256 -c -
+```
+
+Do not run the app from the disk image. Eject it after installation.
+
+### If you downloaded in a browser
+
+Browser downloads are quarantined. Check the source and checksum as described
+above, then mount the DMG or extract the zip and drag `Glance.app` to
+Applications. There is no double-click first-launch bypass for a quarantined
+download; Developer ID-signed, notarized builds avoid this friction.
+Only bypass the block if you trust the download.
+
+1. **Terminal:** remove the installed app's quarantine flag, then open it normally:
 
    ```sh
    xattr -dr com.apple.quarantine /Applications/Glance.app
+   open /Applications/Glance.app
    ```
 
-Use the installed path if you chose a different directory. Eject the disk image
-after installation. The helper's double-click route still needs verification
-with a real browser-downloaded release; if macOS blocks the helper, use one of
-the manual routes above.
+   Use the installed path if you chose a different directory.
+2. **System Settings:** try opening the installed app, then go to
+   **System Settings → Privacy & Security → Open Anyway** and confirm the prompt.
+3. **DMG helper:** run it from Terminal, replacing `<version>` with the version
+   of the mounted DMG:
+
+   ```sh
+   bash "/Volumes/Glance <version>/Install Glance.command"
+   ```
+
+   Double-clicking the helper is blocked while the file is quarantined. It quits
+   a running Glance, preserves an existing copy in your Trash, installs in
+   `/Applications`, removes the quarantine flag, registers the app and launches
+   it. If `/Applications` is not writable, it tells you and uses `~/Applications`
+   instead. To preview without changes, prefix the command with `DRY_RUN=1`;
+   to choose another install directory, set `PREFIX` to an absolute path.
+
+Do not run the app from the disk image. Eject the image after installation.
 
 ## Linux AppImage
 

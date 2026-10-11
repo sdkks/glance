@@ -12,16 +12,21 @@ Rust implementation under its own MIT license.
 
 ### Install on macOS
 
-Download the Apple Silicon DMG or zip from the
-[releases page](https://github.com/sdkks/glance/releases).
-There is no Intel or Universal build. The declared minimum is macOS 11.0;
-see [installation notes](docs/installing.md#macos-releases) for compatibility caveats.
+Recommended: download in Terminal with `gh` (GitHub CLI) or `curl`; CLI
+downloads are not quarantined and need no first-launch workaround.
+For Apple Silicon only, macOS 11.0 or newer, run in a fresh directory:
 
-Mount the DMG and double-click `Install Glance.command`, or extract the zip and
-drag `Glance.app` to Applications (do not run it from the disk image).
-These builds are self-signed and not notarized, so macOS blocks a downloaded copy.
-See [first-launch instructions](docs/installing.md#macos-releases) for the helper,
-System Settings → Privacy & Security → **Open Anyway**, and the Terminal alternative.
+```sh
+gh release download --repo sdkks/glance --pattern 'Glance-*-arm64.dmg' --pattern 'Glance-*-arm64.sha256'
+grep -E 'Glance-.*-arm64\.dmg$' Glance-*-arm64.sha256 | shasum -a 256 -c -
+# Continue only if the checksum reports OK.
+hdiutil attach Glance-*-arm64.dmg
+```
+
+Drag `Glance.app` to Applications, eject the DMG, then open the installed app.
+See [installation instructions](docs/installing.md#macos-releases) for the full
+CLI install, `curl` and zip variants, browser-download fallback and compatibility
+caveats. Builds are self-signed and not notarized; only install downloads you trust.
 
 ### Install on Linux
 
