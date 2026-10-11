@@ -6,6 +6,8 @@ and versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.1.2] - 2026-10-11
+
 ### Added
 
 - Add a DMG install helper and first-launch instructions for self-signed,
