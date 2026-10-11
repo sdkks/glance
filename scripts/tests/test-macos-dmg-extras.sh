@@ -56,7 +56,8 @@ HOME="$home" PATH="$work/bin:$PATH" PREFIX="$prefix" DRY_RUN=1 bash "$helper" > 
 snapshot > "$work/after"
 cmp "$work/before" "$work/after"
 grep -F "$prefix/Glance.app" "$work/dry-run.log"
-grep -F 'Previous app preserved' "$work/dry-run.log"
+grep -Fx 'Dry run: existing app would be moved to a new unique directory inside your Trash.' "$work/dry-run.log"
+if grep -F 'Previous app preserved' "$work/dry-run.log"; then exit 1; fi
 grep -F 'verify installed Info.plist version matches 9.8.7' "$work/dry-run.log"
 if grep -F 'Unexpected action:' "$work/dry-run.log"; then exit 1; fi
 # Missing destination is not created by preview either.

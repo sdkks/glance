@@ -67,7 +67,11 @@ if [ -e "$destination" ]; then
         trash=$(mktemp -d "$HOME/.Trash/Glance-install.XXXXXX") || fail 'Cannot create a safe location in Trash.'
     fi
     action mv "$destination" "$trash/Glance.app"
-    printf 'Previous app preserved in %s/Glance.app\n' "$trash"
+    if [ "$dry" = 1 ]; then
+        printf 'Dry run: existing app would be moved to a new unique directory inside your Trash.\n'
+    else
+        printf 'Previous app preserved in %s/Glance.app\n' "$trash"
+    fi
 fi
 action ditto "$source_app" "$destination"
 action xattr -dr com.apple.quarantine "$destination"
