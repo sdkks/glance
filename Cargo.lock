@@ -890,7 +890,7 @@ dependencies = [
 
 [[package]]
 name = "glance"
-version = "0.2.1"
+version = "0.3.0"
 dependencies = [
  "arboard",
  "block2 0.6.2",
