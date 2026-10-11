@@ -6,6 +6,10 @@ and versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- Support trackpad pinch zoom at the pointer, using the same zoom limits as `+`/`−`.
+
 ## [0.3.0] - 2026-10-11
 
 ### Added

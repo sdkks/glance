@@ -207,6 +207,44 @@ fn shortcuts_enabled(ctx: &egui::Context) -> bool {
         && ctx.input(|input| input.focused)
 }
 
+fn canvas_input_event(
+    view: &mut View,
+    event: &egui::Event,
+    pointer: egui::Pos2,
+    canvas: egui::Rect,
+    size: [usize; 2],
+    ppp: f32,
+) {
+    match event {
+        egui::Event::Zoom(factor) => view.zoom(*factor, pointer, canvas, size, ppp),
+        egui::Event::MouseWheel {
+            unit,
+            delta,
+            modifiers,
+            ..
+        } => {
+            if *unit == egui::MouseWheelUnit::Point && !modifiers.command && !modifiers.ctrl {
+                view.pan(*delta, canvas, size, ppp);
+            } else {
+                view.zoom(
+                    (delta.y
+                        * if *unit == egui::MouseWheelUnit::Line {
+                            0.15
+                        } else {
+                            0.01
+                        })
+                    .exp(),
+                    pointer,
+                    canvas,
+                    size,
+                    ppp,
+                );
+            }
+        }
+        _ => {}
+    }
+}
+
 struct Playback {
     worker: crate::animation::Worker,
     clock: crate::animation::Clock,
@@ -1501,34 +1539,14 @@ impl Viewer {
                         {
                             ctx.input(|input| {
                                 for event in &input.events {
-                                    if let egui::Event::MouseWheel {
-                                        unit,
-                                        delta,
-                                        modifiers,
-                                        ..
-                                    } = event
-                                    {
-                                        if *unit == egui::MouseWheelUnit::Point
-                                            && !modifiers.command
-                                            && !modifiers.ctrl
-                                        {
-                                            self.view.pan(*delta, canvas, size, ppp);
-                                        } else {
-                                            self.view.zoom(
-                                                (delta.y
-                                                    * if *unit == egui::MouseWheelUnit::Line {
-                                                        0.15
-                                                    } else {
-                                                        0.01
-                                                    })
-                                                .exp(),
-                                                pointer,
-                                                canvas,
-                                                size,
-                                                ppp,
-                                            );
-                                        }
-                                    }
+                                    canvas_input_event(
+                                        &mut self.view,
+                                        event,
+                                        pointer,
+                                        canvas,
+                                        size,
+                                        ppp,
+                                    );
                                 }
                             });
                         }
@@ -2507,6 +2525,106 @@ mod tests {
             pressed: true,
             repeat,
             modifiers: Modifiers::NONE,
+        }
+    }
+
+    #[test]
+    fn pinch_events_zoom_at_pointer_with_shared_scale_clamps() {
+        for ppp in [1.0, 2.0] {
+            let ctx = egui::Context::default();
+            let canvas = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(400.0, 300.0));
+            let size = [1600, 800];
+            let pointer = egui::pos2(100.0, 100.0);
+            let mut view = View::default();
+            let initial_scale = view.scale(canvas, size, ppp);
+            for (factor, expected) in [
+                (1.25, initial_scale * 1.25),
+                (0.8, initial_scale),
+                (f32::MAX, crate::view::MAX_SCALE),
+                (f32::MIN_POSITIVE, crate::view::MIN_SCALE),
+            ] {
+                let before = view.rect(canvas, size, ppp);
+                let uv = (pointer - before.min) / before.size();
+                let mut output = ctx.run_ui(
+                    egui::RawInput {
+                        screen_rect: Some(canvas),
+                        events: vec![
+                            egui::Event::PointerMoved(pointer),
+                            egui::Event::Zoom(factor),
+                        ],
+                        ..Default::default()
+                    },
+                    |ui| {
+                        ui.ctx().input(|input| {
+                            let pointer = input.pointer.hover_pos().unwrap();
+                            for event in &input.events {
+                                canvas_input_event(&mut view, event, pointer, canvas, size, ppp);
+                            }
+                        });
+                    },
+                );
+                output.textures_delta.clear();
+                assert_eq!(view.scale(canvas, size, ppp), expected);
+                if factor == 1.25 || factor == 0.8 {
+                    let after = view.rect(canvas, size, ppp);
+                    assert!(((pointer - after.min) / after.size() - uv).length() < 0.0001);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn canvas_wheel_events_keep_pan_and_zoom_behavior() {
+        for (unit, modifiers, zoom_sensitivity) in [
+            (egui::MouseWheelUnit::Point, Modifiers::NONE, None),
+            (egui::MouseWheelUnit::Point, Modifiers::COMMAND, Some(0.01)),
+            (egui::MouseWheelUnit::Point, Modifiers::CTRL, Some(0.01)),
+            (egui::MouseWheelUnit::Line, Modifiers::NONE, Some(0.15)),
+            (egui::MouseWheelUnit::Page, Modifiers::NONE, Some(0.01)),
+        ] {
+            let ctx = egui::Context::default();
+            let canvas = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(400.0, 300.0));
+            let size = [1600, 800];
+            let ppp = 2.0;
+            let pointer = egui::pos2(100.0, 100.0);
+            let delta = egui::vec2(12.0, -10.0);
+            let mut view = View::default();
+            view.actual_size();
+            view.pan(egui::vec2(23.0, -17.0), canvas, size, ppp);
+            let before = view.rect(canvas, size, ppp);
+            let mut output = ctx.run_ui(
+                egui::RawInput {
+                    screen_rect: Some(canvas),
+                    events: vec![
+                        egui::Event::PointerMoved(pointer),
+                        egui::Event::MouseWheel {
+                            unit,
+                            delta,
+                            phase: egui::TouchPhase::Move,
+                            modifiers,
+                        },
+                    ],
+                    ..Default::default()
+                },
+                |ui| {
+                    ui.ctx().input(|input| {
+                        let pointer = input.pointer.hover_pos().unwrap();
+                        for event in &input.events {
+                            canvas_input_event(&mut view, event, pointer, canvas, size, ppp);
+                        }
+                    });
+                },
+            );
+            output.textures_delta.clear();
+            let after = view.rect(canvas, size, ppp);
+            if let Some(sensitivity) = zoom_sensitivity {
+                assert_eq!(view.scale(canvas, size, ppp), (delta.y * sensitivity).exp());
+                let uv = (pointer - before.min) / before.size();
+                assert!(((pointer - after.min) / after.size() - uv).length() < 0.0001);
+            } else {
+                assert_eq!(view.scale(canvas, size, ppp), 1.0);
+                assert_eq!(after.center(), before.center() + delta);
+            }
         }
     }
 

@@ -37,7 +37,8 @@ or `1`) recenters; **Actual Size (100%)** (`2`) displays one source pixel per
 physical screen pixel, including HiDPI. `+` (or `=`) and `−` zoom about the canvas
 center. A line-unit mouse wheel zooms at the pointer, clamped to 0.01×–500×.
 Drag or two-axis point-unit trackpad scrolling pans when the image exceeds the
-viewport; scrolling never navigates. Ctrl/Command+scroll also zooms at the pointer.
+viewport; scrolling never navigates. Ctrl/Command+scroll and trackpad pinch gestures
+zoom at the pointer, using the same 0.01×–500× limits.
 Hold **Space** for temporary pan mode, then **move the mouse without pressing a
 button** over an enlarged image: the canvas cursor is a grab hand while held and
 a grabbing hand while moving or dragging. Left-drag also pans, with or without

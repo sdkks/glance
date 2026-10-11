@@ -105,7 +105,7 @@ Images start centered at Fit without enlarging small images.
 Choose **View → Actual Size (100%)** to inspect one source pixel per physical
 screen pixel. Zoom with `+`/`−` or the mouse wheel. Drag to pan an enlarged
 image, or hold **Space** and move the mouse without pressing a button.
-Trackpad scrolling pans; scrolling never navigates.
+Trackpad scrolling pans; pinch gestures zoom at the pointer. Scrolling never navigates.
 
 While another file loads, the previous image stays visible. A failed load
 keeps it visible too, with a named error and navigation still available.
