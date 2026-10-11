@@ -16,7 +16,7 @@ Core features:
 - Convenient navigation/rotation shortcuts
 - Pure Rust with some libavif interop.
 
-# Demo
+## Demo
 
 https://github.com/user-attachments/assets/c0a4556d-e430-41f1-b094-871d1d8e576d
 

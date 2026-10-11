@@ -106,7 +106,7 @@ runs with sips-316 / macOS 26.6.2; byte identity across tool/OS versions is not
 promised. No embedded timestamp differences were observed.
 
 The source of truth is the single committed master
-`assets/icon/glance-icon-master.png`, the maintainer-supplied artwork
+`assets/icon/glance-icon-master.png`, the project's original artwork
 (`glance-enhanced.png`, 2048×2048, RGBA with a real alpha channel — the rounded
 edges are transparent). It is used for **both** platforms: the macOS iconset and
 the Linux hicolor set are derived from it. `make icons` asserts that every
@@ -142,8 +142,7 @@ is ImageMagick, e.g. `magick assets/icon/glance-icon-master.png -resize
 24x24 assets/icons/hicolor/24x24/apps/glance.png`, repeated for each listed size.
 That alternative is not a project dependency, has not been validated here, and
 need not match sips bytes; `.icns` regeneration still requires macOS.
-See [THIRD_PARTY.md](../THIRD_PARTY.md) for the maintainer-supplied artwork
-provenance.
+See [THIRD_PARTY.md](../THIRD_PARTY.md) for the artwork provenance.
 
 ## Verifying artifacts and installs
 

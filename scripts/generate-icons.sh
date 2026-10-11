@@ -1,7 +1,7 @@
 #!/bin/sh
 # Regenerate the derived icon bundle from the single committed master.
 #
-# The master is human-supplied artwork with a real alpha channel (transparent
+# The master is original artwork with a real alpha channel (transparent
 # rounded edges). Alpha is preserved end-to-end and asserted below so a future
 # tool change cannot silently flatten it.
 set -eu
