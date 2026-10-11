@@ -6,6 +6,11 @@ and versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Fixed
+
+- Release packaging installs the pinned toolchain's rustfmt and clippy components up
+  front, so tagged macOS builds no longer fail on a cargo-fmt conflict.
+
 ## [0.1.2] - 2026-10-11
 
 ### Added
