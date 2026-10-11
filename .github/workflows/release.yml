@@ -86,7 +86,10 @@ jobs:
       - name: Install pinned Rust
         run: |
           toolchain=$(python3 -c 'import tomllib; print(tomllib.load(open("rust-toolchain.toml", "rb"))["toolchain"]["channel"])')
-          rustup toolchain install "$toolchain" --profile minimal
+          # Install the toolchain's declared components here: rust-toolchain.toml asks for
+          # rustfmt and clippy, and rustup would otherwise try to add them lazily during the
+          # build, which fails on runners with a conflicting bin/cargo-fmt.
+          rustup toolchain install "$toolchain" --profile minimal --component rustfmt --component clippy
       - name: Require an Apple Silicon runner
         # macOS support is arm64-only; fail closed if a non-arm64 runner is ever used.
         if: runner.os == 'macOS'
