@@ -13,7 +13,29 @@ mkdir -p "$prefix/Glance.app" "$home/.Trash" "$work/bin" "$work/outside"
 printf 'existing app\n' > "$prefix/Glance.app/keep"
 printf 'trash sentinel\n' > "$home/.Trash/keep"
 printf 'outside sentinel\n' > "$work/outside/keep"
-sh scripts/macos-dmg-extras.sh "$image"
+# Reject bad versions before creating any output (no app or network required).
+for bad in '' 1 1.2 1.2.3.4 v1.2.3 1.2.3-rc1 1..3 1.2.x '1.2.3 trailing' '1.2.3
+4.5.6'; do
+    if sh scripts/macos-dmg-extras.sh "$work/rejected" "$bad" > "$work/version-error.log" 2>&1; then
+        echo 'Unexpected success for malformed release version.' >&2; exit 1
+    fi
+    grep -F 'DMG extras require a release version (x.y.z) as the second argument.' "$work/version-error.log"
+    [ ! -e "$work/rejected" ]
+done
+if sh scripts/macos-dmg-extras.sh "$work/rejected" > "$work/version-error.log" 2>&1; then
+    echo 'Unexpected success without a release version.' >&2; exit 1
+fi
+grep -F 'DMG extras require a release version (x.y.z) as the second argument.' "$work/version-error.log"
+[ ! -e "$work/rejected" ]
+# Two versions ensure the generator does not just hardcode the current release.
+for version in 9.8.7 12.34.56; do
+    sh scripts/macos-dmg-extras.sh "$image" "$version"
+    [ "$(grep -Eo '[0-9]+\.[0-9]+\.[0-9]+' "$image/Read Me.txt" | sort -u)" = "$version" ]
+    grep -Fx "   asset names include the version. For the current release, $version:" "$image/Read Me.txt"
+    for extension in dmg sha256; do
+        grep -Fx "   curl -fL -O https://github.com/sdkks/glance/releases/download/v$version/Glance-$version-arm64.$extension" "$image/Read Me.txt"
+    done
+done
 helper="$image/Install Glance.command"
 [ "$(stat -f '%Lp' "$helper")" = 755 ]
 [ -x "$helper" ]
@@ -31,8 +53,8 @@ grep -Fx '   bash "/Volumes/Glance <version>/Install Glance.command"' "$image/Re
 grep -F 'has no paid Apple Developer ID' "$image/Read Me.txt"
 grep -F 'for a quarantined download. Developer ID-signed, notarized builds avoid' "$image/Read Me.txt"
 grep -F "gh release download --repo sdkks/glance --pattern 'Glance-*-arm64.dmg' --pattern 'Glance-*-arm64.sha256'" "$image/Read Me.txt"
-grep -F 'curl -fL -O https://github.com/sdkks/glance/releases/download/v0.1.3/Glance-0.1.3-arm64.dmg' "$image/Read Me.txt"
-grep -F 'curl -fL -O https://github.com/sdkks/glance/releases/download/v0.1.3/Glance-0.1.3-arm64.sha256' "$image/Read Me.txt"
+grep -Fx '   hdiutil attach Glance-*-arm64.dmg -mountpoint "$PWD/glance-volume"' "$image/Read Me.txt"
+grep -Fx '   hdiutil detach "$PWD/glance-volume"' "$image/Read Me.txt"
 grep -F "grep -E 'Glance-.*-arm64\.dmg\$' Glance-*-arm64.sha256 | shasum -a 256 -c -" "$image/Read Me.txt"
 grep -F 'Continue only if the checksum reports OK. The .sha256 file lists both' "$image/Read Me.txt"
 grep -F 'the zip and DMG; checking the whole file needs both downloads present.' "$image/Read Me.txt"

@@ -292,9 +292,9 @@ sudo apt-get install -y --no-install-recommends build-essential ca-certificates 
 make appimage
 # Output: build/Glance-<version>-<x86_64|aarch64>.AppImage and .sha256
 cd build
-sha256sum -c Glance-0.1.0-aarch64.AppImage.sha256 # adapt version/architecture
-chmod +x Glance-0.1.0-aarch64.AppImage
-./Glance-0.1.0-aarch64.AppImage /absolute/path/to/image.avif
+sha256sum -c 'Glance-<version>-aarch64.AppImage.sha256' # adapt version/architecture
+chmod +x 'Glance-<version>-aarch64.AppImage'
+'./Glance-<version>-aarch64.AppImage' /absolute/path/to/image.avif
 ```
 
 The version comes from `Cargo.toml`. Packaging pins appimagetool 1.9.1 and
