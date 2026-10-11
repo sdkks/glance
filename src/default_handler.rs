@@ -22,8 +22,9 @@ pub fn merge_mimeapps(existing: &str, entries: &[&str]) -> String {
             && entries.contains(&key.trim())
         {
             let key = key.trim();
-            output.push_str(&format!("{key}=glance.desktop;\n"));
-            seen.insert(key);
+            if seen.insert(key) {
+                output.push_str(&format!("{key}=glance.desktop;\n"));
+            }
         } else {
             output.push_str(line);
         }
@@ -216,6 +217,22 @@ mod tests {
         let after = "# header\n[Default Applications]\n# keep\ntext/plain=editor.desktop;\nimage/png=glance.desktop;\nimage/jpeg=glance.desktop;\n[Added Associations]\nimage/png=other.desktop;\n";
         assert_eq!(merge_mimeapps(before, ENTRIES), after);
         assert_eq!(merge_mimeapps(after, ENTRIES), after);
+    }
+    #[test]
+    fn duplicate_target_keys_collapse_to_first_position() {
+        let before = "[Default Applications]\nimage/png=first.desktop;\n# between duplicates\nimage/jpeg=old.desktop;\nimage/png=second.desktop;\n[Added Associations]\nimage/png=other.desktop;\n";
+        let after = "[Default Applications]\nimage/png=glance.desktop;\n# between duplicates\nimage/jpeg=glance.desktop;\n[Added Associations]\nimage/png=other.desktop;\n";
+        let merged = merge_mimeapps(before, ENTRIES);
+        assert_eq!(merged, after);
+        assert_eq!(merge_mimeapps(&merged, ENTRIES), merged);
+    }
+    #[test]
+    fn duplicate_non_target_keys_are_preserved() {
+        let before = "[Default Applications]\ntext/plain=first.desktop;\nimage/png=old.desktop;\ntext/plain=second.desktop;\n";
+        let after = "[Default Applications]\ntext/plain=first.desktop;\nimage/png=glance.desktop;\ntext/plain=second.desktop;\nimage/jpeg=glance.desktop;\n";
+        let merged = merge_mimeapps(before, ENTRIES);
+        assert_eq!(merged, after);
+        assert_eq!(merge_mimeapps(&merged, ENTRIES), merged);
     }
     #[test]
     fn missing_group_and_trailing_newline() {
