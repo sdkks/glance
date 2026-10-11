@@ -23,6 +23,9 @@ and versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- Offer `Settings ▸ Open new files in` only on macOS, where incoming documents
+  can be delivered to an already-running instance.
+
 - Keep install examples version-agnostic and generate DMG instructions with the
   packaged version instead of embedding a stale release version.
 
