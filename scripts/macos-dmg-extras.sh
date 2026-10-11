@@ -93,9 +93,9 @@ Installing Glance on macOS
 
 Glance is self-signed (ad-hoc signed) and not notarized because this project
 has no paid Apple Developer ID. There is no double-click first-launch bypass
-for a quarantined download; only Developer ID-signed, notarized builds avoid
-this friction. Only bypass the block if you trust the download and have
-checked its source and checksum.
+for a quarantined download. Developer ID-signed, notarized builds avoid
+this friction; CLI downloads are not quarantined either. Only bypass the
+block if you trust the download and have checked its source and checksum.
 
 Choose one of these routes:
 
@@ -103,13 +103,30 @@ Choose one of these routes:
    xattr -dr com.apple.quarantine /Applications/Glance.app
    Open the installed app normally afterwards. Use the installed path if
    you chose a different directory.
-2. System Settings: drag Glance.app to Applications and try opening it.
+2. CLI re-download: get a clean, non-quarantined copy with gh (GitHub CLI)
+   or curl. No xattr command or System Settings workaround is needed.
+   With gh installed and configured, run in a fresh directory:
+   gh release download --repo sdkks/glance --pattern 'Glance-*-arm64.dmg' --pattern 'Glance-*-arm64.sha256'
+   grep -E 'Glance-.*-arm64\.dmg$' Glance-*-arm64.sha256 | shasum -a 256 -c -
+   Continue only if the checksum reports OK. The .sha256 file lists both
+   the zip and DMG; checking the whole file needs both downloads present.
+   The grep command selects only the DMG line.
+
+   For curl, copy asset URLs from https://github.com/sdkks/glance/releases;
+   asset names include the version. For the current release, 0.1.3:
+   curl -fL -O https://github.com/sdkks/glance/releases/download/v0.1.3/Glance-0.1.3-arm64.dmg
+   curl -fL -O https://github.com/sdkks/glance/releases/download/v0.1.3/Glance-0.1.3-arm64.sha256
+   grep -E 'Glance-.*-arm64\.dmg$' Glance-*-arm64.sha256 | shasum -a 256 -c -
+   Continue only if the checksum reports OK. Eject the old DMG, quit Glance,
+   then install the new copy (requires write access to /Applications):
+   mkdir glance-volume
+   hdiutil attach Glance-*-arm64.dmg -mountpoint "$PWD/glance-volume"
+   ditto glance-volume/Glance.app /Applications/Glance.app
+   hdiutil detach "$PWD/glance-volume"
+   open /Applications/Glance.app
+3. System Settings: drag Glance.app to Applications and try opening it.
    Then go to System Settings -> Privacy & Security -> "Open Anyway"
    and confirm the prompt.
-3. Avoid the prompt: download without a browser (gh release download or
-   curl), or use a package manager. CLI downloads are not quarantined.
-   Glance does not currently provide a package-manager release; see the
-   installation docs for source-build instructions.
 4. Helper: run it from Terminal, replacing <version> with the DMG version:
    bash "/Volumes/Glance <version>/Install Glance.command"
    Double-clicking it is blocked while the file is quarantined. The helper
