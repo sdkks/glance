@@ -6,13 +6,13 @@ and versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.1.0] - 2026-10-11
+
 ### Added
 
-- Add **Help → About Glance** with version, copyable commit SHA and build details.
-
-- Confirmed **Settings → Set as the default image viewer…** action for supported
-  image types on macOS 12+ and Linux, with success/failure notices.
-
+- Help → About Glance, with the version, a copyable commit SHA and build details.
+- Set Glance as the default image viewer for supported image types from Settings
+  (macOS 12+ and Linux), with clear success and failure notices.
 - Image-first desktop viewer with file/folder opening, drag and drop, refreshed
   folder navigation, natural/size/date sorting, zoom, Fit, Actual Size and Space-pan.
 - Raster and icon previews, scale-aware SVG/SVGZ, AVIF and JPEG XL stills, and
@@ -29,15 +29,8 @@ and versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
-- Accept local `file://` references passed by launchers as the initial image path.
-
-- Register the macOS document-open handler from AppKit launch notifications,
-  with an idempotent viewer fallback; `GLANCE_TRACE_OPEN=1` identifies each
-  registration point (cold-launch document delivery remains unverified).
-
-- Automatically rebuild stale macOS native AVIF stages safely under `build/`
-  during `make macos-artifacts`; direct packaging still refuses stale executables
-  and shows commands to rebuild the stage into a fresh path.
-
-- Handle macOS Finder double-click and drag-to-Dock document opening, both at
-  launch and while Glance is running (native event delivery remains unverified).
+- Open images from Finder by double-click or drag to the Dock, both when Glance is
+  launched by the document and while it is already running.
+- Accept `file://` references passed by launchers as the initial image path.
+- `make macos-artifacts` rebuilds a stale native AVIF stage automatically instead of
+  refusing to package.
