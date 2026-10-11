@@ -12,6 +12,22 @@ pub struct FileVersion {
 }
 
 impl FileVersion {
+    /// Decode/playback guard: ctime-only bookkeeping does not change image content.
+    /// Keep full equality (including path and ctime) for conservative cache reuse.
+    pub fn same_content(&self, other: &Self) -> bool {
+        if self.size != other.size || self.modified != other.modified {
+            return false;
+        }
+        #[cfg(unix)]
+        {
+            (self.identity.0, self.identity.1) == (other.identity.0, other.identity.1)
+        }
+        #[cfg(not(unix))]
+        {
+            true
+        }
+    }
+
     pub fn read(path: &std::path::Path) -> io::Result<Self> {
         let metadata = fs::metadata(path)?;
         #[cfg(unix)]
@@ -348,6 +364,52 @@ pub(crate) mod tests {
     impl Drop for TempDir {
         fn drop(&mut self) {
             fs::remove_dir_all(&self.0).unwrap();
+        }
+    }
+
+    #[cfg(unix)]
+    pub fn change_metadata_only(path: &std::path::Path) {
+        use std::os::unix::fs::PermissionsExt;
+        let before = FileVersion::read(path).unwrap();
+        let mode = fs::metadata(path).unwrap().permissions().mode();
+        fs::set_permissions(path, fs::Permissions::from_mode(mode ^ 0o100)).unwrap();
+        let after = FileVersion::read(path).unwrap();
+        assert_eq!(before.size, after.size);
+        assert_eq!(before.modified, after.modified);
+        assert_eq!(before.identity.0, after.identity.0);
+        assert_eq!(before.identity.1, after.identity.1);
+        assert_ne!(before, after, "chmod must change ctime for this regression");
+    }
+
+    #[test]
+    fn content_comparison_keeps_size_mtime_and_file_identity() {
+        let dir = TempDir::new();
+        let path = dir.0.join("image.png");
+        fs::write(&path, b"image").unwrap();
+        let version = FileVersion::read(&path).unwrap();
+        let mut other = version.clone();
+        assert!(version.same_content(&other));
+        other.size += 1;
+        assert!(!version.same_content(&other));
+        other = version.clone();
+        other.modified += std::time::Duration::from_secs(1);
+        assert!(!version.same_content(&other));
+        #[cfg(unix)]
+        {
+            for component in [0, 1] {
+                other = version.clone();
+                if component == 0 {
+                    other.identity.0 += 1;
+                } else {
+                    other.identity.1 += 1;
+                }
+                assert!(!version.same_content(&other));
+            }
+            other = version.clone();
+            other.identity.2 += 1;
+            other.identity.3 += 1;
+            assert!(version.same_content(&other));
+            assert_ne!(version, other, "cache equality must remain strict");
         }
     }
 

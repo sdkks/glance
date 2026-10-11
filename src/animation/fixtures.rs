@@ -381,6 +381,55 @@ fn truncation_version_change_and_static_detection() {
         16
     );
 }
+#[cfg(unix)]
+#[test]
+fn metadata_only_changes_do_not_interrupt_animation() {
+    let dir = TempDir::new();
+    let w = worker(&dir, "gif", &gif(None));
+    let path = dir.0.join("animation.gif");
+    crate::folder::tests::change_metadata_only(&path);
+    for index in [1, 2] {
+        w.advance(None);
+        let frame = wait(&w).unwrap().unwrap();
+        assert_eq!(frame.index, index);
+        assert_eq!(frame.final_frame, index == 2);
+    }
+}
+
+#[test]
+fn content_change_after_animation_started_is_rejected() {
+    for change in ["mtime", "replacement", "removed"] {
+        let dir = TempDir::new();
+        let bytes = gif(None);
+        let w = worker(&dir, "gif", &bytes);
+        w.advance(None);
+        assert_eq!(wait(&w).unwrap().unwrap().index, 1);
+        let path = dir.0.join("animation.gif");
+        match change {
+            "mtime" => std::fs::File::options()
+                .write(true)
+                .open(&path)
+                .unwrap()
+                .set_times(
+                    std::fs::FileTimes::new().set_modified(std::time::SystemTime::UNIX_EPOCH),
+                )
+                .unwrap(),
+            "replacement" => {
+                let replacement = dir.0.join("replacement.gif");
+                std::fs::write(&replacement, &bytes).unwrap();
+                std::fs::rename(replacement, &path).unwrap();
+            }
+            _ => std::fs::remove_file(&path).unwrap(),
+        }
+        w.advance(None);
+        assert!(
+            matches!(wait(&w), Err(LoadError::Malformed(message))
+            if message == "File changed during animation; reopen it"),
+            "{change}"
+        );
+    }
+}
+
 #[test]
 fn manual_step_uses_displayed_index_after_skipped_or_inflight_frames() {
     let dir = TempDir::new();

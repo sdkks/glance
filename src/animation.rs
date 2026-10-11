@@ -447,7 +447,10 @@ fn run(shared: &Shared, version: &crate::folder::FileVersion) -> Result<(), Load
             }
             state.advance.take().expect("advance checked")
         };
-        if crate::folder::FileVersion::read(path).ok().as_ref() != Some(version) {
+        if crate::folder::FileVersion::read(path)
+            .ok()
+            .is_none_or(|after| !version.same_content(&after))
+        {
             return Err(LoadError::Malformed(
                 "File changed during animation; reopen it".into(),
             ));
@@ -497,7 +500,10 @@ fn run(shared: &Shared, version: &crate::folder::FileVersion) -> Result<(), Load
         // Decode dependents strictly in order, even when presentation skips them.
         next = stream.next()?.map(Arc::new);
         let final_frame = next.is_none() && !may_repeat(loops, completed.saturating_add(1));
-        if crate::folder::FileVersion::read(path).ok().as_ref() != Some(version) {
+        if crate::folder::FileVersion::read(path)
+            .ok()
+            .is_none_or(|after| !version.same_content(&after))
+        {
             return Err(LoadError::Malformed(
                 "File changed during animation; reopen it".into(),
             ));
