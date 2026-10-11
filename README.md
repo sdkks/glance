@@ -995,9 +995,14 @@ Native AVIF is bundled **by default**: `make macos-artifacts` runs `make
 bundle-avif` when `AVIF_STAGE` (default `build/bundle-libs`) does not exist,
 then `make notices` using that stage's native notices. An existing stage is reused
 only if its executable is not older than the Rust sources, Cargo manifests/lockfile,
-`build.rs`, and embedded macOS icon. Newer inputs cause packaging to refuse the
-stage and print recovery commands. The default stage cannot be refreshed in
-place: the builder refuses to reuse a directory. Build into a new, empty path:
+`build.rs`, and embedded macOS icon. Newer inputs automatically refresh a stage
+under the repository's `build/` directory: the old stage is removed and rebuilt,
+with a notice in the build log. Automatic removal requires a relative child path
+of `build/`, no symlink or traversal components, and the
+`Contents/MacOS/glance` payload marker. Unsafe or incomplete paths are refused
+without deletion; remove/refresh them manually. Up-to-date stages are left alone.
+The builder itself still refuses to reuse a directory. For unusual situations
+(such as a stale stage outside `build/`), build into a new, empty path:
 
 ```sh
 make bundle-avif AVIF_STAGE=build/avif-release-2
@@ -1007,7 +1012,8 @@ make macos-artifacts AVIF_STAGE=build/avif-release-2
 Choose a fresh `AVIF_STAGE` after toolchain changes too (timestamps do not detect
 those). Partial/missing stage inputs fail loudly, never silently
 produce an AVIF-less release. Direct `sh scripts/package-macos.sh [stage]`
-consumes an already prepared stage and notices; it does not prepare them.
+consumes an already prepared stage and notices; it does not prepare them and
+still refuses stale executables with manual recovery commands.
 
 Packaging copies the stage's native-linked executable and exactly
 `libavif.16.dylib` + `libdav1d.7.dylib` into `Contents/MacOS` and

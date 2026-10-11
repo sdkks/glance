@@ -41,6 +41,7 @@ test-scripts:
 	sh scripts/tests/test-macos-floor.sh
 	sh scripts/tests/test-macos-freshness.sh
 	sh scripts/tests/test-macos-inputs.sh
+	sh scripts/tests/test-avif-stage-refresh.sh
 	@if python3 -c 'import tomllib' >/dev/null 2>&1; then \
 		python3 -m unittest discover -s scripts/tests -p 'test_notices.py'; \
 	else \
@@ -115,7 +116,7 @@ export AVIF_STAGE NOTICES_STAGE SKIP_AVIF SKIP_NOTICES MACOS_OUT
 macos-artifacts: macos-artifact-inputs
 macos-artifact-inputs:
 	@test "$$(uname -s)" = Darwin || { echo "macOS packaging requires macOS." >&2; exit 1; }
-	@if [ "$(SKIP_AVIF)" != 1 ] && [ ! -d "$(AVIF_STAGE)" ]; then MACOSX_DEPLOYMENT_TARGET=11.0 $(MAKE) bundle-avif; fi
+	@if [ "$(SKIP_AVIF)" != 1 ]; then sh scripts/prepare-avif-stage.sh "$(AVIF_STAGE)" $(MAKE); fi
 	@if [ "$(SKIP_NOTICES)" != 1 ]; then \
 		if [ "$(SKIP_AVIF)" = 1 ]; then native=build/no-native-notices; else native="$(AVIF_STAGE)/Contents/Resources/licenses/native"; fi; \
 		$(MAKE) notices NOTICES_ARGS="--output \"$(NOTICES_STAGE)\" --native-notices \"$$native\""; \
