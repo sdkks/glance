@@ -6,6 +6,12 @@ and versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- Add `File ▸ New Window` for independent image windows, each with its own folder
+  position, zoom, pan and playback. `⌘W` closes the focused window; `⌘Q` quits all
+  windows, and closing the last window quits Glance.
+
 ### Fixed
 
 - Keep install examples version-agnostic and generate DMG instructions with the
