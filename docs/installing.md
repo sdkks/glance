@@ -55,13 +55,13 @@ keeps it separate from other downloads.
 
 If you prefer `curl`, copy the asset URLs from the
 [releases page](https://github.com/sdkks/glance/releases). Asset names include
-the version, so a latest-release URL alone is not enough. For the current
-release, **0.1.3**, run these commands in a fresh directory, then use the DMG
-verification and installation commands above:
+the version, so a latest-release URL alone is not enough. Replace `<version>`
+with the release version in these examples and run them in a fresh directory,
+then use the DMG verification and installation commands above:
 
 ```sh
-curl -fL -O https://github.com/sdkks/glance/releases/download/v0.1.3/Glance-0.1.3-arm64.dmg
-curl -fL -O https://github.com/sdkks/glance/releases/download/v0.1.3/Glance-0.1.3-arm64.sha256
+curl -fL -O 'https://github.com/sdkks/glance/releases/download/v<version>/Glance-<version>-arm64.dmg'
+curl -fL -O 'https://github.com/sdkks/glance/releases/download/v<version>/Glance-<version>-arm64.sha256'
 grep -E 'Glance-.*-arm64\.dmg$' Glance-*-arm64.sha256 | shasum -a 256 -c -
 ```
 
@@ -110,9 +110,9 @@ AppImage executable and pass an image path when launching it. Use the version
 and architecture you downloaded in place of the example values:
 
 ```sh
-sha256sum -c Glance-0.1.0-aarch64.AppImage.sha256 # adapt version/architecture
-chmod +x Glance-0.1.0-aarch64.AppImage
-./Glance-0.1.0-aarch64.AppImage /absolute/path/to/image.avif
+sha256sum -c 'Glance-<version>-aarch64.AppImage.sha256' # adapt version/architecture
+chmod +x 'Glance-<version>-aarch64.AppImage'
+'./Glance-<version>-aarch64.AppImage' /absolute/path/to/image.avif
 ```
 
 Normal mounting needs working FUSE (`/dev/fuse`). Without FUSE, use

@@ -203,7 +203,7 @@ directory for inspection. The macOS scratch binary is not a Linux executable.
 On a native Linux host after `make appimage`:
 
 ```sh
-image="$PWD/build/Glance-0.1.0-$(uname -m).AppImage" # adapt the Cargo version
+image="$PWD/build/Glance-$(make -s version)-$(uname -m).AppImage"
 fixture="$PWD/assets/test/web/alpha8.avif"
 mkdir -p build/appimage-check
 cd build/appimage-check

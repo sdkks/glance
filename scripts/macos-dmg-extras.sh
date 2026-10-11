@@ -1,7 +1,17 @@
 #!/bin/sh
 # Generate only DMG extras; the app and zip payloads remain independent.
 set -eu
+# Usage: sh scripts/macos-dmg-extras.sh <target-directory> <x.y.z>
 output=${1:?target directory required}
+version=${2:-}
+fail_version() {
+    printf '%s\n' 'DMG extras require a release version (x.y.z) as the second argument.' >&2
+    exit 1
+}
+case "$version" in ''|*[!0-9.]*) fail_version ;; esac
+if ! printf '%s\n' "$version" | LC_ALL=C grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+$'; then
+    fail_version
+fi
 mkdir -p "$output"
 cat > "$output/Install Glance.command" <<'HELPER'
 #!/bin/bash
@@ -88,7 +98,7 @@ action open "$destination"
 printf 'Done.\n'
 HELPER
 chmod 755 "$output/Install Glance.command"
-cat > "$output/Read Me.txt" <<'README'
+cat > "$output/Read Me.txt" <<README
 Installing Glance on macOS
 
 Glance is self-signed (ad-hoc signed) and not notarized because this project
@@ -113,16 +123,16 @@ Choose one of these routes:
    The grep command selects only the DMG line.
 
    For curl, copy asset URLs from https://github.com/sdkks/glance/releases;
-   asset names include the version. For the current release, 0.1.3:
-   curl -fL -O https://github.com/sdkks/glance/releases/download/v0.1.3/Glance-0.1.3-arm64.dmg
-   curl -fL -O https://github.com/sdkks/glance/releases/download/v0.1.3/Glance-0.1.3-arm64.sha256
+   asset names include the version. For the current release, $version:
+   curl -fL -O https://github.com/sdkks/glance/releases/download/v$version/Glance-$version-arm64.dmg
+   curl -fL -O https://github.com/sdkks/glance/releases/download/v$version/Glance-$version-arm64.sha256
    grep -E 'Glance-.*-arm64\.dmg$' Glance-*-arm64.sha256 | shasum -a 256 -c -
    Continue only if the checksum reports OK. Eject the old DMG, quit Glance,
    then install the new copy (requires write access to /Applications):
    mkdir glance-volume
-   hdiutil attach Glance-*-arm64.dmg -mountpoint "$PWD/glance-volume"
+   hdiutil attach Glance-*-arm64.dmg -mountpoint "\$PWD/glance-volume"
    ditto glance-volume/Glance.app /Applications/Glance.app
-   hdiutil detach "$PWD/glance-volume"
+   hdiutil detach "\$PWD/glance-volume"
    open /Applications/Glance.app
 3. System Settings: drag Glance.app to Applications and try opening it.
    Then go to System Settings -> Privacy & Security -> "Open Anyway"

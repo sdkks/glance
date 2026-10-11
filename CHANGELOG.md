@@ -6,6 +6,11 @@ and versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Fixed
+
+- Keep install examples version-agnostic and generate DMG instructions with the
+  packaged version instead of embedding a stale release version.
+
 ## [0.1.4] - 2026-10-11
 
 ### Fixed

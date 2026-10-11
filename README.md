@@ -36,11 +36,11 @@ Ubuntu 24.04 is the baseline. Make the AppImage executable and run it with
 an image path. For example, from the download directory:
 
 ```sh
-chmod +x Glance-0.1.0-x86_64.AppImage
-./Glance-0.1.0-x86_64.AppImage /absolute/path/to/image.png
+chmod +x 'Glance-<version>-x86_64.AppImage'
+'./Glance-<version>-x86_64.AppImage' /absolute/path/to/image.png
 ```
 
-Use the version you downloaded in place of `0.1.0`.
+Use the version you downloaded in place of `<version>`.
 AppImage desktop integration is not automatic. See
 [Linux installation](docs/installing.md#linux-appimage) for checksums,
 FUSE alternatives and desktop registration. You can also
