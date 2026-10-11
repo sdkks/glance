@@ -111,6 +111,7 @@ enum Command {
     CopyFile,
     Paste,
     Reveal,
+    SetDefaultHandler,
 }
 
 #[derive(Default)]
@@ -256,6 +257,8 @@ pub struct Viewer {
     render_state: Option<eframe::egui_wgpu::RenderState>,
     clipboard: Option<arboard::Clipboard>,
     action_error: Option<String>,
+    action_notice: Option<String>,
+    default_handler_result: Option<std::sync::mpsc::Receiver<Result<(), String>>>,
     reveal_child: Option<std::process::Child>,
 }
 
@@ -318,6 +321,8 @@ impl Viewer {
             render_state: cc.wgpu_render_state.clone(),
             clipboard: None,
             action_error: prefetch_error,
+            action_notice: None,
+            default_handler_result: None,
             reveal_child: None,
         };
         if let Some(path) = initial {
@@ -881,6 +886,39 @@ impl Viewer {
         }
     }
 
+    fn set_default_handler(&mut self, frame: &eframe::Frame) {
+        if self.default_handler_result.is_some() {
+            self.action_error = Some("Setting defaults is still running; please wait.".into());
+            return;
+        }
+        self.space_pan.update_key(false, false, false, true);
+        let mut dialog = rfd::MessageDialog::new()
+            .set_title("Make Glance the default image viewer?")
+            .set_description("Change the default application for all image types supported by Glance? This replaces your current image viewer associations.")
+            .set_buttons(rfd::MessageButtons::OkCancel);
+        if let Some(window) = frame.winit_window() {
+            dialog = dialog.set_parent(window.as_ref());
+        }
+        if dialog.show() != rfd::MessageDialogResult::Ok {
+            return;
+        }
+        self.action_notice = None;
+        self.action_error = None;
+        let (sender, receiver) = std::sync::mpsc::channel();
+        match std::thread::Builder::new()
+            .name("default-handler".into())
+            .spawn(move || {
+                let _ = sender.send(crate::default_handler::set_default_handler());
+            }) {
+            Ok(_) => self.default_handler_result = Some(receiver),
+            Err(error) => {
+                self.action_error =
+                    Some(format!("Cannot start default application worker: {error}"))
+            }
+        }
+        self.context.request_repaint();
+    }
+
     fn dialog(&mut self, frame: &eframe::Frame) {
         self.space_pan.update_key(false, false, false, true);
         let mut dialog = rfd::FileDialog::new()
@@ -1010,6 +1048,15 @@ impl Viewer {
             });
         });
         ui.menu_button("Settings", |ui| {
+            ui.add_enabled_ui(self.default_handler_result.is_none(), |ui| {
+                menu_command(
+                    ui,
+                    "Set as the default image viewer…",
+                    Command::SetDefaultHandler,
+                    command,
+                );
+            });
+            ui.separator();
             ui.menu_button("Animation rate", |ui| {
                 animation_rate_menu(ui, self.settings.animation_rate, command);
             });
@@ -1119,6 +1166,27 @@ impl eframe::App for Viewer {
         }
         self.tick_animation(ctx);
         self.update_title(ctx);
+        if let Some(receiver) = &self.default_handler_result {
+            match receiver.try_recv() {
+                Ok(result) => {
+                    match result {
+                        Ok(()) => self.action_notice = Some(
+                            "Glance is now the default image viewer for its supported image types."
+                                .into(),
+                        ),
+                        Err(error) => self.action_error = Some(error),
+                    }
+                    self.default_handler_result = None;
+                }
+                Err(std::sync::mpsc::TryRecvError::Empty) => {
+                    ctx.request_repaint_after(std::time::Duration::from_millis(100))
+                }
+                Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                    self.action_error = Some("Default application worker stopped; some associations may have changed. Check your system defaults before retrying.".into());
+                    self.default_handler_result = None;
+                }
+            }
+        }
         if let Some(child) = &mut self.reveal_child {
             match child.try_wait() {
                 Ok(Some(status)) => {
@@ -1180,6 +1248,20 @@ impl eframe::App for Viewer {
                 .inner;
             if dismiss {
                 self.action_error = None;
+            }
+        }
+        if let Some(notice) = &self.action_notice {
+            let dismiss = egui::Panel::top("action-notice")
+                .show(ui, |ui| {
+                    ui.horizontal_wrapped(|ui| {
+                        ui.label(notice);
+                        ui.button("Dismiss").clicked()
+                    })
+                    .inner
+                })
+                .inner;
+            if dismiss {
+                self.action_notice = None;
             }
         }
         self.staging_frame = self.staging_frame.wrapping_add(1);
@@ -1394,6 +1476,7 @@ impl eframe::App for Viewer {
                     playback.worker.advance(Some(playback.displayed_index));
                 }
             }
+            Some(Command::SetDefaultHandler) => self.set_default_handler(frame),
             Some(Command::Open) => self.dialog(frame),
             Some(Command::Navigate(direction)) => self.refresh(Some(direction)),
             Some(Command::Sort(sort)) => {
@@ -2374,6 +2457,8 @@ mod tests {
             render_state: None,
             clipboard: None,
             action_error: None,
+            action_notice: None,
+            default_handler_result: None,
             reveal_child: None,
         };
         viewer.admit(Completion {

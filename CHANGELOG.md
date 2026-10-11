@@ -8,6 +8,9 @@ and versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- Confirmed **Settings → Set as the default image viewer…** action for supported
+  image types on macOS 12+ and Linux, with success/failure notices.
+
 - Image-first desktop viewer with file/folder opening, drag and drop, refreshed
   folder navigation, natural/size/date sorting, zoom, Fit, Actual Size and Space-pan.
 - Raster and icon previews, scale-aware SVG/SVGZ, AVIF and JPEG XL stills, and
