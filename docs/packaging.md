@@ -166,7 +166,8 @@ Release notes use the tag's `## [X.Y.Z]` body from `CHANGELOG.md` at the tagged 
 Missing or empty sections fall back to the embedded summary; reruns refresh notes.
 
 Pushing the reviewed branch and `vX.Y.Z` tag starts `.github/workflows/release.yml`:
-**gate → package → publish**. Both Ubuntu 24.04 and macOS gates must pass
+**gate → package → publish**. Gates run on `ubuntu-26.04` and `macos-26`;
+the publish job runs on `ubuntu-26.04`. Both gates must pass
 `make verify`, `make audit`, and `make machete` before either packaging job
 starts. Both packages must succeed before the release is created/updated with
 `GITHUB_TOKEN`. Before any asset replacement, an existing public release is
@@ -184,7 +185,7 @@ Developer ID signing, or notarization is performed. Ordinary pushes to `main`
 and pull requests run the same gates in `.github/workflows/ci.yml`.
 
 Gate runners install distro/Homebrew development libraries. AVIF tests run only
-where libavif ≥1.4.2 and dav1d ≥1.5.4 are available; Ubuntu 24.04's older packages
+where libavif ≥1.4.2 and dav1d ≥1.5.4 are available; older native packages
 correctly disable AVIF there. Packaging independently builds checksum-pinned
 native decoders, bundles them, and requires the existing AVIF smoke checks.
 
@@ -194,7 +195,8 @@ Release attachments are compressed, never raw executables or `.app` trees:
   (one checksum file covers both zip and DMG); plus
   `Glance-<version>-macos-arm64-notices.tar.gz` and `-notices.sha256`.
 - Linux: `Glance-<version>-x86_64.AppImage` and `.AppImage.sha256` (native Ubuntu
-  24.04 runner; AppImage contains compressed SquashFS); plus
+  24.04 runner deliberately retained for glibc compatibility; AppImage contains
+  compressed SquashFS); plus
   `Glance-<version>-linux-<arch>.tar.gz` (portable AppRun payload and tagged
   source for `make install-linux`), `Glance-<version>-linux-<arch>-notices.tar.gz`,
   and `Glance-<version>-linux-<arch>.sha256` covering both tarballs.
@@ -463,8 +465,10 @@ parallelism defaults to two jobs (`JOBS=4 make appimage` overrides it).
 
 The AppImage deliberately uses the system's glibc/libgcc, X11/Wayland, Vulkan/
 Mesa drivers, fonts and desktop services; it does not bundle GPU drivers or a
-whole Linux distribution. Ubuntu 24.04 is the baseline, not arbitrary older
-Linux. Normal AppImage mounting needs working FUSE (`/dev/fuse`). Older runtimes
+whole Linux distribution. The Linux AppImage deliberately builds on the
+`ubuntu-24.04` baseline for glibc compatibility, not arbitrary older Linux;
+`ubuntu-26.04` would raise the glibc floor from 2.39 to 2.43. CI/release gates
+use `ubuntu-26.04` and `macos-26`, and publication uses `ubuntu-26.04`. Normal AppImage mounting needs working FUSE (`/dev/fuse`). Older runtimes
 may require `libfuse2` (`libfuse2t64` on Ubuntu 24.04); this pinned runtime embeds
 libfuse, so that package is not normally required. In containers or without
 FUSE, use `--appimage-extract-and-run` or extract and run `squashfs-root/AppRun`.
