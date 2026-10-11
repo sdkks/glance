@@ -6,6 +6,8 @@ and versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.1.4] - 2026-10-11
+
 ### Fixed
 
 - Correct macOS installation and first-launch guidance: recommend `gh`/`curl`
