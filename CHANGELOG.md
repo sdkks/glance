@@ -6,6 +6,8 @@ and versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.1.3] - 2026-10-11
+
 ### Fixed
 
 - Release packaging installs the pinned toolchain's rustfmt and clippy components up
