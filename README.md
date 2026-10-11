@@ -74,6 +74,8 @@ cargo run --locked -- /absolute/path/to/folder
 In the app, choose **File → Open…**, press **⌘O / Ctrl+O**, or drop a file
 or folder onto the window. A folder opens its first eligible image.
 Browsing is nonrecursive and skips dot-prefixed and Finder-hidden names.
+Choose **File → New Window** for an independent window; on macOS, **Settings → Open new files in**
+chooses Current window (default) or New window for incoming documents. See [Windows](docs/usage.md#windows).
 
 ## Using Glance
 
@@ -103,7 +105,7 @@ Viewer shortcuts are suppressed while menus or another control own focus.
 | Action | Shortcut |
 | --- | --- |
 | Open | ⌘O / Ctrl+O |
-| Close the viewer | ⌘W / Ctrl+W |
+| Close the focused window | ⌘W / Ctrl+W |
 | Previous / next | Left / Right |
 | First / last | Home / End |
 | Fit | `0` or `1` |
@@ -115,7 +117,8 @@ Viewer shortcuts are suppressed while menus or another control own focus.
 | Pause / resume animation | `P` |
 | Next animation frame | `.` |
 
-The stack also provides **⌘Q / Ctrl+Q** as a global Quit shortcut.
+**⌘Q / Ctrl+Q** quits all windows; closing the last window also quits Glance.
+Both close and quit shortcuts follow the viewer's focus rules.
 Menus support Tab/Shift+Tab to focus and Enter/Space to activate.
 
 ### Animation and settings
@@ -126,7 +129,7 @@ Use **Playback → Pause/Resume** or **Next Frame** to inspect them.
 and **Off (first frame only)**. Space remains temporary pan, not playback.
 
 **Settings → Preload depth** controls neighbor decoding and resident history.
-Preload depth and animation rate are saved on macOS and Linux; sort is not.
+Preload depth, animation rate and the open-new-files choice are saved on macOS and Linux; sort is not.
 See [animation playback](docs/usage.md#animation-playback),
 [preloading](docs/usage.md#preloading-and-resident-history) and
 [settings persistence](docs/usage.md#settings-persistence) for details.

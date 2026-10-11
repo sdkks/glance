@@ -19,15 +19,6 @@ Folder browsing is nonrecursive and skips dot-prefixed/Finder-hidden names.
 Explicitly opened hidden or missing files remain selected on opening. Corrupt
 files stay in the list and show a named error; navigation and Open remain available.
 
-Close the viewer with **⌘W on macOS / Ctrl+W on Linux**, or the window's close
-button. Glance has one window, so closing it exits the app through the same
-normal shutdown path. The shortcut is suppressed (and not consumed) while a
-menu, popup, text control, or native file dialog owns input, or the viewer is
-unfocused. **⌘Q on macOS / Ctrl+Q on Linux** remains the pinned egui stack's
-built-in Quit shortcut (macOS also has its native application-menu Quit action).
-Glance does not add or override that binding; unlike the viewer's guarded close
-shortcut, the stack's Quit shortcut is global.
-
 Left/Right select previous/next; Home/End select first/last, without wrapping.
 The **Navigate → Sort** submenu offers natural Name A→Z/Z→A, Size largest/smallest
 first, and Modified newest/oldest first, indicating the active choice. Sort
@@ -83,6 +74,35 @@ one replaceable pending selection; only the current generation may be displayed.
 A separate bounded worker decodes neighbors, so even an uncancellable neighbor
 codec cannot queue-block a foreground request. Settled images have no application
 repaint timer.
+
+## Windows
+
+Choose **File → New Window** to open an empty, independent image window, then
+use Open or drop an image into it. Each window has its own image, folder
+position, zoom/pan and orientation, playback position/pause state, and action
+errors. Each draws its own menu bar. Settings and the clipboard are shared
+across the app; changing animation rate or preload depth applies to all windows.
+
+On macOS, **Settings → Open new files in** controls documents delivered while
+Glance is running, including Finder double-clicks and `open -a Glance`:
+
+- **Current window** (default): replaces the focused window's image. A window
+  already showing that file takes priority; otherwise Glance uses the most
+  recently focused live window, then the sole remaining window.
+- **New window**: opens the document in a new window, leaving other windows
+  untouched, even if one already shows that file.
+
+The choice is saved across launches in the [settings file](#settings-persistence).
+A request containing several documents opens only the first. Startup is unchanged:
+the launch document opens in the first window regardless of this setting.
+In-app Open, Paste File and dropping a file still open it in that window.
+
+**⌘W on macOS / Ctrl+W on Linux**, or the window's close button, closes only
+that window; other windows stay open. Closing the last window quits Glance.
+**⌘Q on macOS / Ctrl+Q on Linux** quits the whole app from any focused window.
+Both shortcuts are suppressed while a menu, popup, text control or native file
+dialog owns input, or the window is unfocused. Memory use grows with the number
+of open windows; see the [per-window limits](rendering.md#current-limits-and-remaining-work).
 
 ## Preloading and resident history
 
@@ -187,8 +207,8 @@ normal playback does not emit per-frame logs.
 
 ## Settings persistence
 
-Preload depth and animation rate are loaded before the first folder admission from a human-readable
-TOML file:
+Preload depth, animation rate and the open-new-files choice are loaded before the
+first folder admission from a human-readable TOML file:
 
 - macOS: `$HOME/Library/Application Support/glance/settings.toml`
 - Linux: `$XDG_CONFIG_HOME/glance/settings.toml` when that variable is absolute;
@@ -198,8 +218,11 @@ TOML file:
 The stable key `preload-depth = 1` accepts integers 0 (Off) through 5.
 `animation-rate = "honor-file"` accepts `honor-file`, `exact`, `30-fps`, `24-fps`,
 `15-fps`, `10-fps`, or `off`. An unknown or invalid rate value falls back to
-`honor-file` without discarding a valid preload depth. Unknown
-keys are tolerated on load (not retained when saving); missing keys use defaults.
+`honor-file` without discarding a valid preload depth.
+`open-new-files-in = "current-window"` accepts `current-window` or `new-window`;
+a missing, unknown or invalid value uses `current-window` without discarding the
+other valid settings. Unknown keys are tolerated on load (not retained when
+saving); missing keys use defaults.
 Sort still remains session-only. Missing/malformed files or invalid depth values
 use depth 1 with a debug diagnostic, without a dialog. Missing or nonabsolute
 HOME disables persistence, including when XDG_CONFIG_HOME is present.
@@ -274,5 +297,5 @@ path. Use `make install-linux` or copy `resources/glance.desktop` into
 `~/.local/share/applications` first, and ensure its `Exec`/`TryExec` resolve to
 Glance (for an AppImage, adapt them to its installed executable path).
 Real macOS association changes and Linux desktop integration have not yet been verified.
-Finder file-open event handling remains deferred: selecting Glance as the handler
-can launch it, but use Open/drop to select the image on macOS until that support lands.
+Finder document opening is supported at launch and while Glance is running;
+see [Windows](#windows) for the open-new-files policy.
