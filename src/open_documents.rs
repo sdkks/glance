@@ -34,19 +34,32 @@ fn event_trace(descriptors: isize, queued: &[PathBuf]) -> String {
     )
 }
 
+fn registration_trace(point: &str, registered: bool, pid: u32) -> String {
+    let status = if registered {
+        "registered"
+    } else {
+        "skipped already-done"
+    };
+    format!("GLANCE_TRACE_OPEN {point} aevt/odoc registration {status} pid={pid}")
+}
+
 #[cfg(target_os = "macos")]
 mod native {
     use super::*;
     use eframe::egui;
     use objc2::{MainThreadOnly, define_class, msg_send, sel};
+    use objc2_app_kit::{
+        NSApplicationDidFinishLaunchingNotification, NSApplicationWillFinishLaunchingNotification,
+    };
     use objc2_core_services::{
         kAEOpenDocuments, kCoreEventClass, keyDirectObject, typeAlias, typeBookmarkData, typeFSRef,
         typeFileURL,
     };
     use objc2_foundation::{
-        MainThreadMarker, NSAppleEventDescriptor, NSAppleEventManager, NSObject,
+        MainThreadMarker, NSAppleEventDescriptor, NSAppleEventManager, NSNotification,
+        NSNotificationCenter, NSObject,
     };
-    use std::sync::{Mutex, OnceLock};
+    use std::sync::{Mutex, Once, OnceLock};
 
     static DOCUMENTS: Mutex<DocumentQueue> = Mutex::new(DocumentQueue(Vec::new()));
     static CONTEXT: OnceLock<egui::Context> = OnceLock::new();
@@ -126,27 +139,83 @@ mod native {
         }
     );
 
-    pub fn register(mtm: MainThreadMarker) {
-        // SAFETY: NSObject's init returns an initialized instance of this class.
-        let handler: objc2::rc::Retained<OpenDocumentsHandler> =
-            unsafe { msg_send![OpenDocumentsHandler::alloc(mtm), init] };
-        // SAFETY: The selector is defined above with the required descriptor
-        // arguments. The manager does not retain its handler, so deliberately
-        // leak one retained instance for the process-long registration.
-        unsafe {
-            NSAppleEventManager::sharedAppleEventManager()
-                .setEventHandler_andSelector_forEventClass_andEventID(
-                    &handler,
-                    sel!(handleOpenDocuments:withReplyEvent:),
-                    kCoreEventClass,
-                    kAEOpenDocuments,
-                );
+    define_class!(
+        // SAFETY: NSObject has no subclassing requirements; callbacks are sent
+        // by AppKit on the main thread and this class has no Drop implementation.
+        #[unsafe(super = NSObject)]
+        #[thread_kind = MainThreadOnly]
+        struct LaunchObserver;
+
+        impl LaunchObserver {
+            // SAFETY: NotificationCenter sends one NSNotification and expects void.
+            #[unsafe(method(applicationWillFinishLaunching:))]
+            fn application_will_finish_launching(&self, notification: &NSNotification) {
+                // SAFETY: AppKit's notification-name constants are immutable.
+                let point = if &*notification.name() == unsafe { NSApplicationWillFinishLaunchingNotification } {
+                    "observer will-finish"
+                } else {
+                    "observer did-finish"
+                };
+                register_at(self.mtm(), point);
+            }
         }
-        std::mem::forget(handler);
+    );
+
+    pub fn observe_launch(mtm: MainThreadMarker) {
+        // SAFETY: NSObject init initializes this subclass without additional ivars.
+        let observer: objc2::rc::Retained<LaunchObserver> =
+            unsafe { msg_send![LaunchObserver::alloc(mtm), init] };
+        // SAFETY: Both AppKit notifications carry NSNotification, matching the
+        // selector above. No object filter is needed for these launch-only names.
+        unsafe {
+            let center = NSNotificationCenter::defaultCenter();
+            for name in [
+                NSApplicationWillFinishLaunchingNotification,
+                NSApplicationDidFinishLaunchingNotification,
+            ] {
+                center.addObserver_selector_name_object(
+                    &observer,
+                    sel!(applicationWillFinishLaunching:),
+                    Some(name),
+                    None,
+                );
+            }
+        }
+        // NotificationCenter does not own the observer. Keep it alive for the
+        // process lifetime, like the handler; main installs exactly one observer.
+        std::mem::forget(observer);
+    }
+
+    pub fn register(mtm: MainThreadMarker) {
+        register_at(mtm, "viewer fallback");
+    }
+
+    fn register_at(mtm: MainThreadMarker, point: &str) {
+        static REGISTERED: Once = Once::new();
+        let mut registered = false;
+        REGISTERED.call_once(|| {
+            // SAFETY: NSObject's init returns an initialized instance of this class.
+            let handler: objc2::rc::Retained<OpenDocumentsHandler> =
+                unsafe { msg_send![OpenDocumentsHandler::alloc(mtm), init] };
+            // SAFETY: The selector is defined above with the required descriptor
+            // arguments. The manager does not retain its handler, so deliberately
+            // leak one retained instance for the process-long registration.
+            unsafe {
+                NSAppleEventManager::sharedAppleEventManager()
+                    .setEventHandler_andSelector_forEventClass_andEventID(
+                        &handler,
+                        sel!(handleOpenDocuments:withReplyEvent:),
+                        kCoreEventClass,
+                        kAEOpenDocuments,
+                    );
+            }
+            std::mem::forget(handler);
+            registered = true;
+        });
         if trace_enabled() {
             eprintln!(
-                "GLANCE_TRACE_OPEN late aevt/odoc registration pid={}",
-                std::process::id()
+                "{}",
+                registration_trace(point, registered, std::process::id())
             );
         }
     }
@@ -206,11 +275,27 @@ mod native {
 }
 
 #[cfg(target_os = "macos")]
-pub use native::{attach_context, drain, register, trace_open};
+pub use native::{attach_context, drain, observe_launch, register, trace_open};
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn registration_trace_identifies_point_and_once_outcome() {
+        for point in [
+            "observer will-finish",
+            "observer did-finish",
+            "viewer fallback",
+        ] {
+            for (registered, status) in [(true, "registered"), (false, "skipped already-done")] {
+                assert_eq!(
+                    registration_trace(point, registered, 42),
+                    format!("GLANCE_TRACE_OPEN {point} aevt/odoc registration {status} pid=42")
+                );
+            }
+        }
+    }
 
     #[test]
     fn event_trace_counts_only_this_batch_without_consuming_queue() {

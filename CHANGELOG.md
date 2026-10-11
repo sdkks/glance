@@ -29,9 +29,9 @@ and versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
-- Register the macOS document-open handler after AppKit launch so AppKit does
-  not replace it; add `GLANCE_TRACE_OPEN=1` diagnostics (native event delivery
-  remains unverified).
+- Register the macOS document-open handler from AppKit launch notifications,
+  with an idempotent viewer fallback; `GLANCE_TRACE_OPEN=1` identifies each
+  registration point (cold-launch document delivery remains unverified).
 
 - Automatically rebuild stale macOS native AVIF stages safely under `build/`
   during `make macos-artifacts`; direct packaging still refuses stale executables
