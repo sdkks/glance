@@ -38,6 +38,5 @@ Tests compare all retained samples with the untransformed encoded source,
 check U16/alpha retention, aspect dimensions, and exact orientation coordinate
 mapping. Existing alpha8/10/12 fixtures remain unchanged.
 
-The human's external `hato.profile2.12bpc.yuv422.avif` is a read-only local
-smoke input. Its redistribution license was not established, so it is not
-included here.
+The external `hato.profile2.12bpc.yuv422.avif` is a read-only local smoke input.
+Its redistribution license was not established, so it is not included here.
