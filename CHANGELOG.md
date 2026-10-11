@@ -29,6 +29,8 @@ and versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- Accept local `file://` references passed by launchers as the initial image path.
+
 - Register the macOS document-open handler from AppKit launch notifications,
   with an idempotent viewer fallback; `GLANCE_TRACE_OPEN=1` identifies each
   registration point (cold-launch document delivery remains unverified).

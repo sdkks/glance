@@ -838,6 +838,26 @@ settings, or other applications. Empty directories intentionally remain.
 run only for an unstaged `$HOME/.local` install/uninstall; MIME refresh also
 requires an existing `share/mime` directory. Custom/staged prefixes skip caches.
 
+For a repeatable, display-free association check from Linux or macOS, run:
+
+```sh
+make check-linux-associations
+```
+
+This needs **podman and network access** to fetch Ubuntu 24.04 and install
+`xdg-utils`, `desktop-file-utils`, and GLib command-line tools. It streams the
+committed desktop entry into a disposable container (no host installation or
+association changes), validates it, checks PNG/GIF defaults in `mimeapps.list`,
+reads them back with `xdg-mime` and `gio mime`, and uses `gio launch` to assert
+that `Exec` passes the file path as one argument to a logging shim. It does not
+use `xdg-open`, which needs a desktop session. If a built native executable in
+`target/{release,debug}` or a native Linux AppImage in `build/` exists, it also
+checks real `file://` argument decoding via `GLANCE_SMOKE_IMAGE=1` on the host;
+otherwise that sub-check prints SKIP. Missing podman skips the whole check;
+assertion failures exit nonzero. This networked check is not part of `make verify`.
+Real menu/icon discovery and graphical desktop behavior still need the manual
+Linux checks below.
+
 Real Linux menu/icon discovery, associations, native dependencies, and cache
 refresh are **UNVERIFIED** on the macOS development machine. On Linux, run:
 

@@ -100,9 +100,12 @@ PREFIX ?= $(HOME)/.local
 DESTDIR ?=
 DRY_RUN ?= 0
 SUDO ?= 0
-.PHONY: install-linux uninstall-linux help-linux
+.PHONY: install-linux uninstall-linux help-linux check-linux-associations
 help-linux:
-	@printf '%s\n' '  install-linux    Build/install into PREFIX (default ~/.local; DRY_RUN=1 previews)' '  uninstall-linux  Remove unchanged manifest-owned files from PREFIX'
+	@printf '%s\n' '  install-linux    Build/install into PREFIX (default ~/.local; DRY_RUN=1 previews)' '  uninstall-linux  Remove unchanged manifest-owned files from PREFIX' '  check-linux-associations  Check MIME defaults and desktop dispatch (podman/network)'
+
+check-linux-associations:
+	@sh scripts/check-linux-associations.sh
 
 install-linux:
 	@sh scripts/install-linux.sh install "$(PREFIX)" "$(DESTDIR)" "$(DRY_RUN)" "$(SUDO)"
