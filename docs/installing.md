@@ -16,7 +16,8 @@ paid Apple Developer ID. Only install a download you trust; check its source
 and checksum first. Quit Glance before replacing an existing installation.
 The commands below require write access to `/Applications`.
 
-With `gh` installed and configured, download the latest release (no tag needed)
+With `gh` installed (no GitHub account or sign-in is needed to download from
+this public repository), download the latest release (no tag needed)
 in a fresh directory, verify the DMG, then install and open it:
 
 ```sh

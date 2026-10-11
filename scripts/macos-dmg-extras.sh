@@ -105,7 +105,7 @@ Choose one of these routes:
    you chose a different directory.
 2. CLI re-download: get a clean, non-quarantined copy with gh (GitHub CLI)
    or curl. No xattr command or System Settings workaround is needed.
-   With gh installed and configured, run in a fresh directory:
+   With gh installed (no account or sign-in needed), run in a fresh directory:
    gh release download --repo sdkks/glance --pattern 'Glance-*-arm64.dmg' --pattern 'Glance-*-arm64.sha256'
    grep -E 'Glance-.*-arm64\.dmg$' Glance-*-arm64.sha256 | shasum -a 256 -c -
    Continue only if the checksum reports OK. The .sha256 file lists both
