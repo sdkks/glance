@@ -33,6 +33,7 @@ toml_edit = { version = "=0.25.17", default-features = false, features = ["parse
 [target.'cfg(target_os = "macos")'.dependencies]
 objc2 = "=0.6.5"
 objc2-app-kit = { version = "=0.3.2", default-features = false, features = ["std", "NSPasteboard", "NSWorkspace", "block2", "objc2-uniform-type-identifiers"] }
-objc2-foundation = { version = "=0.3.2", default-features = false, features = ["std", "NSArray", "NSEnumerator", "NSString", "NSURL", "NSBundle", "NSProcessInfo", "NSError"] }
+objc2-foundation = { version = "=0.3.2", default-features = false, features = ["std", "NSArray", "NSEnumerator", "NSString", "NSURL", "NSBundle", "NSProcessInfo", "NSError", "NSAppleEventManager", "NSAppleEventDescriptor", "objc2-core-services"] }
+objc2-core-services = { version = "=0.3.2", default-features = false, features = ["std", "AE", "AEDataModel", "AppleEvents"] }
 block2 = "=0.6.2"
 objc2-uniform-type-identifiers = { version = "=0.3.2", default-features = false, features = ["std", "UTType"] }

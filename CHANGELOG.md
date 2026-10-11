@@ -24,3 +24,8 @@ and versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   local file-reference paste, and reveal in the file manager.
 - Bounded neighbor prefetch and resident history, persisted preload depth and
   animation rate, and platform app icons derived from the human-supplied master.
+
+### Fixed
+
+- Handle macOS Finder double-click and drag-to-Dock document opening, both at
+  launch and while Glance is running (native event delivery remains unverified).

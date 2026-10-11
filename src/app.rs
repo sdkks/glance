@@ -325,6 +325,13 @@ impl Viewer {
             default_handler_result: None,
             reveal_child: None,
         };
+        #[cfg(target_os = "macos")]
+        let initial = {
+            crate::open_documents::attach_context(&cc.egui_ctx);
+            // Always consume the launch batch, but preserve CLI precedence.
+            let document = crate::open_documents::drain(initial.as_deref());
+            initial.or(document)
+        };
         if let Some(path) = initial {
             viewer.open(path);
         }
@@ -1158,6 +1165,10 @@ fn menu_command(ui: &mut egui::Ui, label: &str, action: Command, command: &mut O
 
 impl eframe::App for Viewer {
     fn logic(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        #[cfg(target_os = "macos")]
+        if let Some(path) = crate::open_documents::drain(self.selected.as_deref()) {
+            self.open(path);
+        }
         if let Some(loader) = &self.loader {
             self.admit(loader.take_completion());
         }
