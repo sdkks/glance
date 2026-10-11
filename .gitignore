@@ -8,3 +8,6 @@ AGENTS.md
 
 # Downloaded native sources, staging payloads and packaging evidence.
 /build/
+
+# OPI implementation worktrees.
+/.worktrees/
