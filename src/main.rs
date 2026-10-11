@@ -19,6 +19,20 @@ mod transform;
 mod view;
 
 use eframe::egui;
+use std::{ffi::OsStr, path::PathBuf};
+
+fn initial_document(arg: &OsStr) -> Option<PathBuf> {
+    // Only the exact, case-sensitive file:// prefix denotes a URL here.
+    // Rejected file URLs yield no document; never retry them as literal paths.
+    if let Some(reference) = arg.to_str()
+        && reference.starts_with("file://")
+    {
+        desktop::parse_reference(reference)
+    } else {
+        // Ordinary CLI paths may be relative or contain non-UTF-8 bytes.
+        Some(PathBuf::from(arg))
+    }
+}
 
 fn window_icon() -> egui::IconData {
     #[cfg(target_os = "macos")]
@@ -30,7 +44,9 @@ fn window_icon() -> egui::IconData {
 }
 
 fn main() -> eframe::Result {
-    let initial_path = std::env::args_os().nth(1).map(std::path::PathBuf::from);
+    let initial_path = std::env::args_os()
+        .nth(1)
+        .and_then(|arg| initial_document(&arg));
     // Packaging diagnostic: exercise the real decoder without a desktop session.
     if std::env::var_os("GLANCE_SMOKE_IMAGE").is_some_and(|v| v == "1") {
         let result = initial_path
@@ -67,6 +83,65 @@ fn main() -> eframe::Result {
         options,
         Box::new(move |cc| Ok(Box::new(app::Viewer::new(cc, initial_path)))),
     )
+}
+
+#[cfg(test)]
+mod argument_tests {
+    use super::*;
+
+    #[test]
+    fn accepts_local_file_uris() {
+        for (input, expected) in [
+            ("file:///tmp/a%20b%23%C3%A9.png", "/tmp/a b#é.png"),
+            ("file://localhost/tmp/a.png", "/tmp/a.png"),
+        ] {
+            assert_eq!(initial_document(OsStr::new(input)), Some(expected.into()));
+        }
+    }
+
+    #[test]
+    fn preserves_plain_paths_including_relative_paths() {
+        for input in [
+            "/tmp/a%20b.png",
+            "relative.png",
+            "./a b.png",
+            "file:relative.png",
+            "file:notes.png",
+            "subdir/image://draft.png",
+            "//remote/a.png",
+            r"C:\images\a.png",
+            "https://example.com/a.png",
+            "FILE:///tmp/a.png",
+        ] {
+            assert_eq!(initial_document(OsStr::new(input)), Some(input.into()));
+        }
+    }
+
+    #[test]
+    fn rejects_remote_and_malformed_file_urls_without_path_fallback() {
+        for input in [
+            "file://remote/tmp/a.png",
+            "file://relative.png",
+            "file:////remote/a.png",
+            "file:///tmp/a%00.png",
+            "file:///tmp/a\0.png",
+            "file:///tmp/%GG",
+            "file:///tmp/%",
+            "file:///tmp/%FF",
+            "file:///tmp/a.png?query",
+            "file:///tmp/a.png#fragment",
+        ] {
+            assert_eq!(initial_document(OsStr::new(input)), None, "{input}");
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn preserves_non_utf8_paths() {
+        use std::{ffi::OsString, os::unix::ffi::OsStringExt};
+        let path = OsString::from_vec(b"/tmp/a\xff.png".to_vec());
+        assert_eq!(initial_document(&path), Some(PathBuf::from(&path)));
+    }
 }
 
 #[cfg(test)]
