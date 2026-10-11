@@ -22,10 +22,10 @@ use eframe::egui;
 use std::{ffi::OsStr, path::PathBuf};
 
 fn initial_document(arg: &OsStr) -> Option<PathBuf> {
+    // Only the exact, case-sensitive file:// prefix denotes a URL here.
+    // Rejected file URLs yield no document; never retry them as literal paths.
     if let Some(reference) = arg.to_str()
-        && (reference.starts_with("file:")
-            || reference.contains("://")
-            || reference.starts_with("//"))
+        && reference.starts_with("file://")
     {
         desktop::parse_reference(reference)
     } else {
@@ -101,21 +101,30 @@ mod argument_tests {
 
     #[test]
     fn preserves_plain_paths_including_relative_paths() {
-        for input in ["/tmp/a%20b.png", "relative.png", "./a b.png"] {
+        for input in [
+            "/tmp/a%20b.png",
+            "relative.png",
+            "./a b.png",
+            "file:relative.png",
+            "file:notes.png",
+            "subdir/image://draft.png",
+            "//remote/a.png",
+            r"C:\images\a.png",
+            "https://example.com/a.png",
+            "FILE:///tmp/a.png",
+        ] {
             assert_eq!(initial_document(OsStr::new(input)), Some(input.into()));
         }
     }
 
     #[test]
-    fn rejects_remote_malformed_and_relative_references() {
+    fn rejects_remote_and_malformed_file_urls_without_path_fallback() {
         for input in [
-            "https://example.com/a.png",
             "file://remote/tmp/a.png",
-            "//remote/a.png",
-            "file:relative.png",
             "file://relative.png",
             "file:////remote/a.png",
             "file:///tmp/a%00.png",
+            "file:///tmp/a\0.png",
             "file:///tmp/%GG",
             "file:///tmp/%",
             "file:///tmp/%FF",
