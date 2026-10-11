@@ -885,9 +885,9 @@ native decoders, bundles them, and requires the existing AVIF smoke checks.
 
 Release attachments are compressed, never raw executables or `.app` trees:
 
-- macOS: `Glance-<version>-<arm64|x86_64>.zip`, `.dmg`, and `.sha256`
+- macOS (Apple Silicon): `Glance-<version>-arm64.zip`, `.dmg`, and `.sha256`
   (one checksum file covers both zip and DMG); plus
-  `Glance-<version>-macos-<arch>-notices.tar.gz` and `-notices.sha256`.
+  `Glance-<version>-macos-arm64-notices.tar.gz` and `-notices.sha256`.
 - Linux: `Glance-<version>-x86_64.AppImage` and `.AppImage.sha256` (native Ubuntu
   24.04 runner; AppImage contains compressed SquashFS); plus
   `Glance-<version>-linux-<arch>.tar.gz` (portable AppRun payload and tagged
@@ -897,7 +897,9 @@ Release attachments are compressed, never raw executables or `.app` trees:
   application artifacts. Checksum entries use sibling basenames: download all
   attachments into one directory before checking them.
 
-macOS runner artifacts are host-architecture builds, not Universal. They are
+macOS support is **Apple Silicon (arm64)** only: there is no Intel build and no
+Universal binary, and the release `package` job refuses to run on a non-arm64
+runner. macOS artifacts are
 **unsigned by a verified developer** (ad-hoc signed only), so downloaded apps
 need the Gatekeeper steps in Packaging (macOS): drag to Applications, then
 right-click → Open, or remove only the trusted app's quarantine attribute.
@@ -934,11 +936,12 @@ Requires macOS, the pinned Rust toolchain, the native build prerequisites listed
 above (CMake, Meson, Ninja, pkg-config), Python 3.11+ for notices, and
 Apple's `ditto`, `hdiutil`, `otool`, `lipo`, `plutil` and `codesign`. These are
 build-time tools, not extra runtime dependencies. Outputs live in
-`target/macos-artifacts/`: `Glance.app`, `Glance-<version>-<arch>.zip`,
-`Glance-<version>-<arch>.dmg` and `Glance-<version>-<arch>.sha256`.
-Version comes from `[package].version` in `Cargo.toml`; architecture is the
-host's `arm64` or `x86_64`, not Universal. Verify downloads with
-`shasum -a 256 -c Glance-<version>-<arch>.sha256` in that directory.
+`target/macos-artifacts/`: `Glance.app`, `Glance-<version>-arm64.zip`,
+`Glance-<version>-arm64.dmg` and `Glance-<version>-arm64.sha256`.
+Version comes from `[package].version` in `Cargo.toml`; the macOS shipping
+target is Apple Silicon, so `arch` is `arm64` (no Universal binary is produced).
+Verify downloads with
+`shasum -a 256 -c Glance-<version>-arm64.sha256` in that directory.
 The zip uses `ditto --sequesterRsrc --keepParent`; the compressed DMG contains
 `Glance.app` and an `/Applications` symlink. Drag the app to Applications.
 The recipe is reproducible, but archive bytes/checksums may change with tool
@@ -948,7 +951,7 @@ The bundle identifier is `io.github.glance-viewer.glance` (a stable application
 namespace, not a claim of domain ownership). Display name is Glance, executable
 is `glance`, and the icon is `Contents/Resources/glance.icns`. Both bundle version
 keys use the Cargo version. The declared and compiled minimum macOS version is
-**11.0**, the first Apple Silicon macOS and a common baseline for Intel/ARM;
+**11.0**, the first Apple Silicon macOS;
 actual oldest-OS compatibility remains unverified. Imported image UTIs cover
 all eligible extensions in `src/formats.rs` (including flattened documents),
 with role **Viewer** and handler rank **Alternate**, never Owner/Default.
@@ -1008,7 +1011,7 @@ Both source-built dylibs and the executable report Mach-O `minos 11.0`.
 Bundling checks both libraries before relocation; packaging rejects every
 executable/dylib with a missing deployment version or a minimum above 11.0
 before signing. This prevents shipping a newer-floor bottle accidentally.
-Actual runtime behaviour on macOS 11–15 and Intel remains **UNVERIFIED**;
+Actual runtime behaviour on macOS 11–14 (Apple Silicon) remains **UNVERIFIED**;
 loader metadata and current arm64 smoke are not older-OS runtime testing.
 
 These builds are **ad-hoc signed, but not Developer ID signed or notarized**.

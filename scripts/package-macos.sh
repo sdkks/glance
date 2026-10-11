@@ -1,10 +1,13 @@
 #!/bin/sh
-# Ad-hoc signed, host-architecture macOS artifacts. No tools/dependencies are installed.
+# Ad-hoc signed macOS artifacts. The shipping target is Apple Silicon (arm64);
+# a host-architecture build is produced, and release packaging refuses non-arm64 hosts.
 set -eu
 cd "$(dirname "$0")/.."
 [ "$(uname -s)" = Darwin ] || { echo 'macOS packaging requires macOS.' >&2; exit 1; }
 arch=$(uname -m)
 case "$arch" in
+    # arm64 is the supported shipping target; x86_64 stays buildable for local
+    # development only, and release packaging asserts arm64 separately.
     arm64|x86_64) ;;
     *) echo "Unsupported macOS architecture: $arch" >&2; exit 1 ;;
 esac
