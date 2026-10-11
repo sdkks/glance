@@ -4,6 +4,12 @@ Rendering behavior, resource bounds and remaining validation work. See [Using Gl
 
 ## Current limits and remaining work
 
+The image, cache, playback and GPU residency bounds described here apply **per
+window**, not to the whole app. Each window retains its own image and caches;
+several windows can approach the sum of the single-window bounds. There is no
+shared global memory budget. The shared GPU upload throttle still bounds
+in-flight staging, but does not cap total residency across windows.
+
 Input reads are bounded at 64 MiB. Decoder output and normalized straight output
 are each bounded at 512 MiB; U8 RGBA uses 4 bytes/pixel, U16 uses 8, and float
 working RGBA uses 16 (also checked against 512 MiB before conversion). Sides are
@@ -85,8 +91,7 @@ tracker.
 Embedded orientation is applied once. Output encoding follows the actual attachment
 format (hardware sRGB encoding or explicit OETF, never both). Other formats
 (including explicitly deferred XCF) give an unsupported-format
-error. Native menus/document-open
-integration and Linux desktop validation are later increments.
+error. Native menu integration and Linux desktop validation remain unverified.
 Interactive zoom/pan feel and real input-device classification still need human
 verification on target desktops. See the [README](../README.md) for the
 no-shared-code provenance note.

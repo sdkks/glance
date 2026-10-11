@@ -9,12 +9,17 @@ and versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ### Added
 
 - Add `Settings ▸ Open new files in` with persisted `Current window` (default) and
-  opt-in `New window` choices for incoming documents. A multi-file open request
-  opens only its first document, in one window.
+  opt-in `New window` choices for macOS documents delivered while Glance is running
+  (Finder double-click or `open -a`). Current window prefers a window already
+  showing the file, then the focused window; New window leaves other windows
+  untouched. A multi-file request opens only its first document; startup still
+  opens the launch document in the first window.
 
 - Add `File ▸ New Window` for independent image windows, each with its own folder
-  position, zoom, pan and playback. `⌘W` closes the focused window; `⌘Q` quits all
-  windows, and closing the last window quits Glance.
+  position, zoom, pan and playback; settings and clipboard remain app-wide.
+  `⌘W` closes the focused window; `⌘Q` quits all windows, and closing the last
+  window quits Glance. Image and cache resource bounds apply per window, so
+  memory use scales with the number of open windows.
 
 ### Fixed
 
