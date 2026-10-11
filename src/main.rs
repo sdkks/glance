@@ -1,8 +1,10 @@
 mod animation;
 mod app;
+mod associations;
 mod cache;
 mod color;
 mod decode;
+mod default_handler;
 mod desktop;
 mod folder;
 mod formats;

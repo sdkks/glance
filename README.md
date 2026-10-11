@@ -249,6 +249,34 @@ pending reveal process is polled non-blockingly. Human verification is still
 needed for transformed alpha pasting into Preview/other receiving applications,
 native file-reference round trips, Finder selection, and transform/input feel.
 
+## Making Glance the default image viewer
+
+Choose **Settings → Set as the default image viewer…** and confirm to replace
+associations for all supported image types. The result appears in a dismissible
+notice; failures are reported without interrupting viewing. Nothing changes at
+installation time. On macOS, run the installed `Glance.app`; the in-app action
+requires macOS 12 or newer and runs in the background. A partial failure can leave
+some types changed; check your system defaults before retrying.
+
+Manual alternatives:
+
+- macOS (including macOS 11): select an image in Finder, choose **Get Info →
+  Open with → Glance → Change All…**, repeating for other types as needed. On
+  macOS 12+, you can also use `duti`, for example
+  `duti -s io.github.glance-viewer.glance public.png all` (install `duti` separately).
+- Linux: use your desktop's **Default Applications** panel or
+  `xdg-mime default glance.desktop image/png`, repeating for other MIME types.
+  The in-app action updates `$XDG_CONFIG_HOME/mimeapps.list` (or
+  `~/.config/mimeapps.list`), preserving unrelated entries.
+
+An AppImage's `.desktop` file lives inside the image, not in the desktop's search
+path. Use `make install-linux` or copy `resources/glance.desktop` into
+`~/.local/share/applications` first, and ensure its `Exec`/`TryExec` resolve to
+Glance (for an AppImage, adapt them to its installed executable path).
+Real macOS association changes and Linux desktop integration are **UNVERIFIED**.
+Finder file-open event handling remains deferred: selecting Glance as the handler
+can launch it, but use Open/drop to select the image on macOS until that support lands.
+
 ## Color and depth
 
 Embedded ordinary RGB ICC matrix and LUT profiles are converted to sRGB by pinned
