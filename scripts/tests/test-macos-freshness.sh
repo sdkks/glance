@@ -2,11 +2,12 @@
 # Hermetic freshness checks: reach the notices boundary, never native tooling.
 set -eu
 cd "$(dirname "$0")/../.."
+[ "$(uname -s)" = Darwin ] || { echo 'SKIP: macOS freshness checks require macOS.'; exit 0; }
 work=$(mktemp -d /tmp/glance-macos-freshness-tests.XXXXXX)
 trap 'rm -rf "$work"' EXIT HUP INT TERM
 mkdir -p "$work/scripts" "$work/src" "$work/bin" "$work/assets/icons/glance.iconset"
 cp scripts/package-macos.sh "$work/scripts/"
-# Allow exercising the input boundary on macOS and Linux without native tools.
+# Stub platform queries so fixtures never need native tools.
 printf '#!/bin/sh\ncase "$1" in -s) echo Darwin ;; -m) echo arm64 ;; *) exit 1 ;; esac\n' > "$work/bin/uname"
 chmod +x "$work/bin/uname"
 printf '[package]\nversion = "0.1.0"\n' > "$work/Cargo.toml"

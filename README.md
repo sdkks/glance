@@ -669,7 +669,8 @@ smoke-tested on macOS arm64, not certified on Linux.
 | `check` | `cargo check --workspace --all-targets --locked` |
 | `clippy` | `cargo clippy --workspace --all-targets --locked -- -D warnings` |
 | `test` | `cargo test --workspace --locked` |
-| `verify` | Sequential, fail-fast fmt-check → check → clippy → test, even with `make -j` |
+| `test-scripts` | Hermetic packaging shell checks and notices tests; macOS freshness/input checks skip on other hosts, notices skip without Python 3.11+ |
+| `verify` | Sequential, fail-fast fmt-check → check → clippy → test → test-scripts, even with `make -j` |
 | `icons` | Rebuild derived icon files from committed masters using macOS `sips` + `iconutil` |
 | `install-hooks` | Opt in to tracked hooks using local `core.hooksPath = .githooks`; refuse conflicts |
 | `uninstall-hooks` | Clear local `core.hooksPath` only when exactly one value equals `.githooks` |
@@ -708,7 +709,7 @@ missing. Cargo and cargo-deny may populate local caches or fetch advisory data;
 audit results depend on the current advisory database and registry state.
 They are intentionally outside `verify` and the pre-commit hook: these opt-in,
 CI-tier dependency checks require extra tools and advisory/network access, while
-`verify` remains fmt-check → check → clippy → test.
+`verify` remains fmt-check → check → clippy → test → test-scripts.
 
 ### Opt-in pre-commit hook
 
@@ -1131,7 +1132,15 @@ make notices NOTICES_ARGS='--output build/notices-release --native-notices build
 # Offline test input only (normal release generation always obtains fresh metadata):
 python3 scripts/generate-notices.py --metadata /tmp/cargo-metadata.json --output build/notices-test
 python3 -m unittest discover -s scripts/tests -p 'test_notices.py'
+make test-scripts
 ```
+
+`make test-scripts` runs the portable macOS deployment-floor parser checks,
+macOS-only freshness and packaging-input checks, then the notices unit tests.
+The macOS-only checks print a skip note on other hosts; notices tests print a
+skip note when Python 3.11+ (`tomllib`) is unavailable. These hermetic checks
+need no native build, network access, or real system mutation and also run as
+the final step of `make verify`.
 
 EXR/HDR, PQ/HLG, XCF and AVIF/JXL sequences remain unsupported.
 

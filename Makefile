@@ -1,8 +1,8 @@
 .DEFAULT_GOAL := help
-.PHONY: help version bump-version release bundle-avif fmt fmt-check check clippy test verify precommit build run icons install-hooks uninstall-hooks version bump-version release
+.PHONY: help version bump-version release bundle-avif fmt fmt-check check clippy test test-scripts verify precommit build run icons install-hooks uninstall-hooks version bump-version release
 
 help: help-linux
-	@printf '%s\n' 'Glance development commands:' '  fmt        Format Rust (modifies files)' '  fmt-check  Check formatting' '  check      Compile all targets without building executables' '  clippy     Lint all targets, warnings are errors' '  test       Run tests' '  verify     Sequential fmt-check, check, clippy, test' '  precommit  Staged whitespace, working-tree fmt-check and check' '  build      Build the release executable' '  bundle-avif Stage macOS decoder-only native AVIF (AVIF_STAGE=new/path)' '  macos-artifacts  Package .app, zip and DMG (macOS tools)' '  dmg        Alias for macos-artifacts' '  macos-smoke  Mount/launch smoke for produced artifacts (IMAGE=path)' '  run        Run the viewer (ARGS="path/to/image.png")' '  audit      Check dependency licenses, advisories, bans, sources (non-mutating)' '  machete    Check for unused direct dependencies (non-mutating)' '  icons      Regenerate macOS and Linux icons from committed masters (macOS tools)' '  install-hooks    Opt in to tracked pre-commit checks (refuses hooksPath conflicts)' '  uninstall-hooks  Remove only our local tracked-hook activation' '  version    Print the package version' '  bump-version  Bump and stamp notes (BUMP=major|minor|patch or VERSION=x.y.z)' '  release    Bump, commit and tag locally (BUMP/VERSION; never pushes)' '  appimage   Build the Linux AppImage (native Linux host; see README)'
+	@printf '%s\n' 'Glance development commands:' '  fmt        Format Rust (modifies files)' '  fmt-check  Check formatting' '  check      Compile all targets without building executables' '  clippy     Lint all targets, warnings are errors' '  test       Run tests' '  test-scripts Run hermetic packaging and notices tests (macOS checks skip elsewhere)' '  verify     Sequential fmt-check, check, clippy, test, test-scripts' '  precommit  Staged whitespace, working-tree fmt-check and check' '  build      Build the release executable' '  bundle-avif Stage macOS decoder-only native AVIF (AVIF_STAGE=new/path)' '  macos-artifacts  Package .app, zip and DMG (macOS tools)' '  dmg        Alias for macos-artifacts' '  macos-smoke  Mount/launch smoke for produced artifacts (IMAGE=path)' '  run        Run the viewer (ARGS="path/to/image.png")' '  audit      Check dependency licenses, advisories, bans, sources (non-mutating)' '  machete    Check for unused direct dependencies (non-mutating)' '  icons      Regenerate macOS and Linux icons from committed masters (macOS tools)' '  install-hooks    Opt in to tracked pre-commit checks (refuses hooksPath conflicts)' '  uninstall-hooks  Remove only our local tracked-hook activation' '  version    Print the package version' '  bump-version  Bump and stamp notes (BUMP=major|minor|patch or VERSION=x.y.z)' '  release    Bump, commit and tag locally (BUMP/VERSION; never pushes)' '  appimage   Build the Linux AppImage (native Linux host; see README)'
 
 version:
 	@awk '/^[ \t]*\[/ {package=($$0 ~ /^[ \t]*\[package\][ \t]*(#.*)?$$/)} package && /^[ \t]*version[ \t]*=/ {split($$0,v,"\""); print v[2]}' Cargo.toml
@@ -37,12 +37,23 @@ clippy:
 test:
 	cargo test --workspace --locked
 
+test-scripts:
+	sh scripts/tests/test-macos-floor.sh
+	sh scripts/tests/test-macos-freshness.sh
+	sh scripts/tests/test-macos-inputs.sh
+	@if python3 -c 'import tomllib' >/dev/null 2>&1; then \
+		python3 -m unittest discover -s scripts/tests -p 'test_notices.py'; \
+	else \
+		printf '%s\n' 'SKIP: notices tests require Python 3.11+ (tomllib unavailable).'; \
+	fi
+
 # Recursive recipes run in order and stop on failure, including under make -j.
 verify:
 	+$(MAKE) fmt-check
 	+$(MAKE) check
 	+$(MAKE) clippy
 	+$(MAKE) test
+	+$(MAKE) test-scripts
 
 precommit:
 	git diff --cached --check
