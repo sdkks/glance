@@ -1,0 +1,5 @@
+# Catalog-lag workaround for ubuntu-26.04; remove once actionlint's own catalog lists it.
+self-hosted-runner:
+  labels:
+    - ubuntu-26.04
+    - ubuntu-26.04-arm
