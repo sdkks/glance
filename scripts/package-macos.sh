@@ -31,6 +31,18 @@ else
         "$native_stage/Contents/Resources/licenses/native/dav1d-1.5.4-COPYING"; do
         [ -f "$input" ] || { echo "Missing AVIF stage input: $input; run make bundle-avif (or SKIP_AVIF=1)." >&2; exit 1; }
     done
+    # Include the embedded macOS icon as well as Rust/build inputs (src also
+    # contains the shader and native shim compiled into the executable).
+    newer_inputs=$(find src Cargo.toml Cargo.lock build.rs \
+        assets/icons/glance.iconset/icon_256x256.png -newer "$binary" -print)
+    if [ -n "$newer_inputs" ]; then
+        printf 'Stale AVIF stage executable: %s; newer executable inputs:\n%s\n' "$binary" "$newer_inputs" >&2
+        printf '%s\n' \
+            'The default stage cannot be refreshed in place; the builder refuses to reuse a directory.' \
+            'Build a fresh stage: make bundle-avif AVIF_STAGE=<new-empty-path>' \
+            'Then package it: make macos-artifacts AVIF_STAGE=<new-empty-path>' >&2
+        exit 1
+    fi
 fi
 if [ "${SKIP_NOTICES:-0}" != 1 ]; then
     [ -f "$notices/THIRD-PARTY-NOTICES.md" ] && [ -f "$notices/LICENSE" ] || {

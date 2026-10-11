@@ -27,5 +27,8 @@ and versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- Refuse to package a stale macOS native AVIF executable and show commands to
+  rebuild the stage into a fresh path.
+
 - Handle macOS Finder double-click and drag-to-Dock document opening, both at
   launch and while Glance is running (native event delivery remains unverified).

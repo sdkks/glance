@@ -992,9 +992,19 @@ remain unverified; Open/drop inside the window and CLI opening remain available.
 
 Native AVIF is bundled **by default**: `make macos-artifacts` runs `make
 bundle-avif` when `AVIF_STAGE` (default `build/bundle-libs`) does not exist,
-then `make notices` using that stage's native notices. An existing stage is an
-explicit reusable input; choose a fresh `AVIF_STAGE` after source/toolchain
-changes to rebuild it. Partial/missing stage inputs fail loudly, never silently
+then `make notices` using that stage's native notices. An existing stage is reused
+only if its executable is not older than the Rust sources, Cargo manifests/lockfile,
+`build.rs`, and embedded macOS icon. Newer inputs cause packaging to refuse the
+stage and print recovery commands. The default stage cannot be refreshed in
+place: the builder refuses to reuse a directory. Build into a new, empty path:
+
+```sh
+make bundle-avif AVIF_STAGE=build/avif-release-2
+make macos-artifacts AVIF_STAGE=build/avif-release-2
+```
+
+Choose a fresh `AVIF_STAGE` after toolchain changes too (timestamps do not detect
+those). Partial/missing stage inputs fail loudly, never silently
 produce an AVIF-less release. Direct `sh scripts/package-macos.sh [stage]`
 consumes an already prepared stage and notices; it does not prepare them.
 
