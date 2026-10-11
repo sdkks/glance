@@ -8,6 +8,8 @@ and versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- Add **Help → About Glance** with version, copyable commit SHA and build details.
+
 - Confirmed **Settings → Set as the default image viewer…** action for supported
   image types on macOS 12+ and Linux, with success/failure notices.
 

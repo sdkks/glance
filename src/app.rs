@@ -112,6 +112,7 @@ enum Command {
     Paste,
     Reveal,
     SetDefaultHandler,
+    About,
 }
 
 #[derive(Default)]
@@ -249,6 +250,7 @@ pub struct Viewer {
     texture_limit: u32,
     display: Display<Arc<Image>>,
     last_title: String,
+    about_open: bool,
     settings: crate::settings::Settings,
     settings_store: crate::settings::Store,
     sort: Sort,
@@ -313,6 +315,7 @@ impl Viewer {
                 }),
             display,
             last_title: String::new(),
+            about_open: false,
             settings,
             settings_store,
             sort: Sort::default(),
@@ -1084,7 +1087,19 @@ impl Viewer {
                 }
             });
         });
+        ui.menu_button("Help", |ui| {
+            menu_command(ui, "About Glance", Command::About, command);
+        });
     }
+}
+
+fn about_text(version: &str, sha: &str, dirty: bool) -> String {
+    let revision = if sha.is_empty() || sha == "unknown" {
+        "unknown".to_owned()
+    } else {
+        format!("{sha}{}", if dirty { "-dirty" } else { "" })
+    };
+    format!("Glance {version}\nCommit: {revision}")
 }
 
 // Run after constructing menus so focus acquired this frame also suppresses close.
@@ -1446,8 +1461,40 @@ impl eframe::App for Viewer {
                     });
                 }
             });
+        egui::Window::new("About Glance")
+            .open(&mut self.about_open)
+            .collapsible(false)
+            .resizable(false)
+            .show(&ctx, |ui| {
+                let text = about_text(
+                    env!("CARGO_PKG_VERSION"),
+                    env!("GLANCE_GIT_SHA"),
+                    env!("GLANCE_GIT_DIRTY") == "1",
+                );
+                ui.add(egui::Label::new(&text).selectable(true));
+                if ui.small_button("Copy version and commit").clicked() {
+                    ctx.copy_text(text);
+                }
+                ui.label(format!(
+                    "Target: {} / {}",
+                    std::env::consts::ARCH,
+                    std::env::consts::OS
+                ));
+                ui.label(concat!("License: ", env!("CARGO_PKG_LICENSE")));
+                if let (Some(avif), Some(dav1d)) = (
+                    option_env!("GLANCE_LIBAVIF_VERSION"),
+                    option_env!("GLANCE_DAV1D_VERSION"),
+                ) {
+                    ui.label(format!("Native AVIF: libavif {avif}, dav1d {dav1d}"));
+                }
+                ui.label("An independently authored, image-first desktop viewer.");
+            });
         close_shortcut(&ctx);
         match command {
+            Some(Command::About) => {
+                self.about_open = true;
+                ctx.request_repaint();
+            }
             Some(Command::Depth(depth)) => {
                 if self.settings.preload_depth == depth {
                     return;
@@ -1511,6 +1558,34 @@ impl eframe::App for Viewer {
 mod tests {
     use super::*;
     use crate::{decode::LoadError, folder::tests::TempDir};
+
+    #[test]
+    fn about_identifies_clean_revision() {
+        assert_eq!(
+            about_text("0.1.0", "abc1234", false),
+            "Glance 0.1.0\nCommit: abc1234"
+        );
+    }
+
+    #[test]
+    fn about_identifies_modified_revision() {
+        assert_eq!(
+            about_text("0.1.0", "abc1234", true),
+            "Glance 0.1.0\nCommit: abc1234-dirty"
+        );
+    }
+
+    #[test]
+    fn about_discloses_unknown_revision() {
+        for sha in ["unknown", ""] {
+            for dirty in [false, true] {
+                assert_eq!(
+                    about_text("0.1.0", sha, dirty),
+                    "Glance 0.1.0\nCommit: unknown"
+                );
+            }
+        }
+    }
 
     #[test]
     fn rate_menu_has_one_active_option_and_selects_via_keyboard() {
@@ -2460,6 +2535,7 @@ mod tests {
                 ..Display::new(Status::Loading)
             },
             last_title: String::new(),
+            about_open: false,
             settings: crate::settings::Settings::default(),
             settings_store: crate::settings::Store::session_only(),
             sort: Sort::default(),
