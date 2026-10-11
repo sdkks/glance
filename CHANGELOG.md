@@ -6,6 +6,8 @@ and versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.2.1] - 2026-10-11
+
 ### Fixed
 
 - Avoid spurious `File changed` errors when only file metadata changes during
