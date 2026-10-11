@@ -95,6 +95,7 @@ impl<T> Display<T> {
 
 #[derive(Clone, Copy)]
 enum Command {
+    NewWindow,
     Playback,
     NextFrame,
     Depth(usize),
@@ -228,7 +229,13 @@ impl Playback {
     }
 }
 
-pub struct Viewer {
+pub(crate) struct Shared {
+    pub settings: crate::settings::Settings,
+    pub store: crate::settings::Store,
+    pub clipboard: Option<arboard::Clipboard>,
+}
+
+pub(crate) struct Viewer {
     context: egui::Context,
     animation: Option<Playback>,
     svg_worker: Option<crate::decode::svg::worker::Worker>,
@@ -246,18 +253,16 @@ pub struct Viewer {
     prefetch_queue: std::collections::VecDeque<PathBuf>,
     loader: Option<Loader>,
     folder: Option<Folder>,
-    selected: Option<PathBuf>,
+    pub(crate) selected: Option<PathBuf>,
     texture_limit: u32,
     display: Display<Arc<Image>>,
-    last_title: String,
+    pub(crate) last_title: String,
     about_open: bool,
     settings: crate::settings::Settings,
-    settings_store: crate::settings::Store,
     sort: Sort,
     view: View,
     space_pan: SpacePan,
     render_state: Option<eframe::egui_wgpu::RenderState>,
-    clipboard: Option<arboard::Clipboard>,
     action_error: Option<String>,
     action_notice: Option<String>,
     default_handler_result: Option<std::sync::mpsc::Receiver<Result<(), String>>>,
@@ -265,15 +270,14 @@ pub struct Viewer {
 }
 
 impl Viewer {
-    pub fn new(cc: &eframe::CreationContext<'_>, initial: Option<PathBuf>) -> Self {
-        // Last-resort registration if neither AppKit launch notification fired.
-        // winit owns the application delegate; leave it untouched.
-        #[cfg(target_os = "macos")]
-        crate::open_documents::register(
-            objc2::MainThreadMarker::new().expect("the viewer must start on the main thread"),
-        );
-        cc.egui_ctx.set_visuals(egui::Visuals::dark());
-        let (loader, display) = match Loader::new(cc.egui_ctx.clone()) {
+    pub(crate) fn new(
+        context: egui::Context,
+        render_state: Option<eframe::egui_wgpu::RenderState>,
+        uploads: Arc<std::sync::Mutex<crate::render::Uploads>>,
+        settings: crate::settings::Settings,
+        initial: Option<PathBuf>,
+    ) -> Self {
+        let (loader, display) = match Loader::new(context.clone()) {
             Ok(loader) => (Some(loader), Display::new(Status::Empty)),
             Err(error) => (
                 None,
@@ -282,7 +286,7 @@ impl Viewer {
                 ))),
             ),
         };
-        let (prefetch, prefetch_error) = match Loader::new(cc.egui_ctx.clone()) {
+        let (prefetch, prefetch_error) = match Loader::new(context.clone()) {
             Ok(loader) => (Some(loader), None),
             Err(error) => (
                 None,
@@ -291,16 +295,15 @@ impl Viewer {
                 )),
             ),
         };
-        let (settings, settings_store) = crate::settings::Store::load();
         let mut cache = Cache::default();
         cache.depth = settings.preload_depth;
         let mut viewer = Self {
-            context: cc.egui_ctx.clone(),
+            context,
             animation: None,
             svg_worker: None,
             pending_svg: None,
             pending_animation: false,
-            uploads: crate::render::Uploads::new(cc.wgpu_render_state.as_ref()),
+            uploads,
             staging_frame: 0,
             pending_image: None,
             last_paint: None,
@@ -313,38 +316,23 @@ impl Viewer {
             loader,
             folder: None,
             selected: None,
-            texture_limit: cc
-                .wgpu_render_state
+            texture_limit: render_state
                 .as_ref()
                 .map_or(crate::decode::MAX_DIMENSION, |state| {
                     state.device.limits().max_texture_dimension_2d
                 }),
             display,
-            last_title: String::new(),
+            last_title: "glance".into(),
             about_open: false,
             settings,
-            settings_store,
             sort: Sort::default(),
             view: View::default(),
             space_pan: SpacePan::default(),
-            render_state: cc.wgpu_render_state.clone(),
-            clipboard: None,
+            render_state,
             action_error: prefetch_error,
             action_notice: None,
             default_handler_result: None,
             reveal_child: None,
-        };
-        #[cfg(target_os = "macos")]
-        let initial = {
-            crate::open_documents::attach_context(&cc.egui_ctx);
-            // Always consume the launch batch, but preserve CLI precedence.
-            let document = crate::open_documents::drain(initial.as_deref());
-            if initial.is_none()
-                && let Some(path) = document.as_deref()
-            {
-                crate::open_documents::trace_open(path);
-            }
-            initial.or(document)
         };
         if let Some(path) = initial {
             viewer.open(path);
@@ -352,7 +340,7 @@ impl Viewer {
         viewer
     }
 
-    fn open(&mut self, path: PathBuf) {
+    pub(crate) fn open(&mut self, path: PathBuf) {
         if self
             .folder
             .as_ref()
@@ -602,7 +590,6 @@ impl Viewer {
             return;
         }
         self.settings.animation_rate = rate;
-        self.settings_store.save(self.settings);
         if let Some(playback) = &mut self.animation
             && let Some(encoded) = self
                 .display
@@ -854,7 +841,7 @@ impl Viewer {
         self.next_prefetch();
     }
 
-    fn desktop_action(&mut self, action: Command) -> Result<(), String> {
+    fn desktop_action(&mut self, action: Command, shared: &mut Shared) -> Result<(), String> {
         if matches!(action, Command::Reveal) {
             if self.reveal_child.is_some() {
                 return Err("Reveal is still running; please wait before retrying.".into());
@@ -867,12 +854,12 @@ impl Viewer {
             self.reveal_child = Some(crate::desktop::reveal(path)?);
             return Ok(());
         }
-        if self.clipboard.is_none() {
-            self.clipboard = Some(arboard::Clipboard::new().map_err(|error| {
+        if shared.clipboard.is_none() {
+            shared.clipboard = Some(arboard::Clipboard::new().map_err(|error| {
                 format!("Clipboard unavailable; check your desktop session and retry: {error}")
             })?);
         }
-        let clipboard = self.clipboard.as_mut().expect("initialized clipboard");
+        let clipboard = shared.clipboard.as_mut().expect("initialized clipboard");
         match action {
             Command::CopyImage => {
                 let image = self
@@ -917,7 +904,9 @@ impl Viewer {
             .set_title("Make Glance the default image viewer?")
             .set_description("Change the default application for all image types supported by Glance? This replaces your current image viewer associations.")
             .set_buttons(rfd::MessageButtons::OkCancel);
-        if let Some(window) = frame.winit_window() {
+        if self.context.viewport_id() == egui::ViewportId::ROOT
+            && let Some(window) = frame.winit_window()
+        {
             dialog = dialog.set_parent(window.as_ref());
         }
         if dialog.show() != rfd::MessageDialogResult::Ok {
@@ -945,7 +934,9 @@ impl Viewer {
         let mut dialog = rfd::FileDialog::new()
             .set_title("Open image")
             .add_filter("JPEG and PNG", &["jpg", "jpeg", "png"]);
-        if let Some(window) = frame.winit_window() {
+        if self.context.viewport_id() == egui::ViewportId::ROOT
+            && let Some(window) = frame.winit_window()
+        {
             dialog = dialog.set_parent(window.as_ref());
         }
         if let Some(parent) = self.selected.as_deref().and_then(|path| path.parent()) {
@@ -994,6 +985,7 @@ impl Viewer {
 
     fn menus(&self, ui: &mut egui::Ui, command: &mut Option<Command>) {
         ui.menu_button("File", |ui| {
+            menu_command(ui, "New Window", Command::NewWindow, command);
             menu_command(ui, "Open…  ⌘/Ctrl+O", Command::Open, command);
             menu_command(ui, "Paste File", Command::Paste, command);
             ui.add_enabled_ui(self.display.image.is_some(), |ui| {
@@ -1113,13 +1105,14 @@ fn about_text(version: &str, sha: &str, dirty: bool) -> String {
     format!("Glance {version}\nCommit: {revision}")
 }
 
-// Run after constructing menus so focus acquired this frame also suppresses close.
-fn close_shortcut(ctx: &egui::Context) {
-    if shortcuts_enabled(ctx)
-        && ctx.input_mut(|input| input.consume_key(Modifiers::COMMAND, Key::W))
-    {
-        // eframe turns this into the same Close viewport event as the OS close button.
-        ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+// Run after constructing menus so focus acquired this frame suppresses shortcuts.
+fn lifecycle_action(ctx: &egui::Context, new_window: bool) -> crate::windows::Action {
+    let enabled = shortcuts_enabled(ctx);
+    crate::windows::Action {
+        new_window,
+        close: ctx.input(|input| input.viewport().close_requested())
+            || (enabled && ctx.input_mut(|input| input.consume_key(Modifiers::COMMAND, Key::W))),
+        quit: enabled && ctx.input_mut(|input| input.consume_key(Modifiers::COMMAND, Key::Q)),
     }
 }
 
@@ -1189,13 +1182,22 @@ fn menu_command(ui: &mut egui::Ui, label: &str, action: Command, command: &mut O
     }
 }
 
-impl eframe::App for Viewer {
-    fn logic(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
-        #[cfg(target_os = "macos")]
-        if let Some(path) = crate::open_documents::drain(self.selected.as_deref()) {
-            crate::open_documents::trace_open(&path);
-            self.open(path);
+impl Viewer {
+    pub(crate) fn sync_settings(&mut self, settings: crate::settings::Settings) {
+        self.set_animation_rate(settings.animation_rate);
+        if self.settings.preload_depth != settings.preload_depth {
+            self.settings.preload_depth = settings.preload_depth;
+            self.cache.depth = settings.preload_depth;
+            self.cache.trim(self.displayed_bytes());
+            if matches!(self.display.status, Status::Ready) {
+                self.start_prefetch();
+            } else {
+                self.stop_prefetch();
+            }
         }
+    }
+
+    pub(crate) fn logic(&mut self, ctx: &egui::Context) {
         if let Some(loader) = &self.loader {
             self.admit(loader.take_completion());
         }
@@ -1244,7 +1246,13 @@ impl eframe::App for Viewer {
         }
     }
 
-    fn ui(&mut self, ui: &mut egui::Ui, frame: &mut eframe::Frame) {
+    pub(crate) fn ui(
+        &mut self,
+        ui: &mut egui::Ui,
+        frame: &mut eframe::Frame,
+        shared: &mut Shared,
+        staging_frame: u64,
+    ) -> crate::windows::Action {
         let ctx = ui.ctx().clone();
         let dropped = ctx.input_mut(|input| std::mem::take(&mut input.raw.dropped_files));
         if let Some(path) = dropped.first().map(|file| file.path().to_path_buf()) {
@@ -1302,7 +1310,7 @@ impl eframe::App for Viewer {
                 self.action_notice = None;
             }
         }
-        self.staging_frame = self.staging_frame.wrapping_add(1);
+        self.staging_frame = staging_frame;
         egui::CentralPanel::default()
             .frame(egui::Frame::central_panel(ui.style()).fill(Color32::from_gray(18)))
             .show(ui, |ui| {
@@ -1474,6 +1482,7 @@ impl eframe::App for Viewer {
                 }
             });
         egui::Window::new("About Glance")
+            .id(egui::Id::new((ctx.viewport_id(), "about")))
             .open(&mut self.about_open)
             .collapsible(false)
             .resizable(false)
@@ -1501,7 +1510,7 @@ impl eframe::App for Viewer {
                 }
                 ui.label("An independently authored, image-first desktop viewer.");
             });
-        close_shortcut(&ctx);
+        let action = lifecycle_action(&ctx, matches!(command, Some(Command::NewWindow)));
         match command {
             Some(Command::About) => {
                 self.about_open = true;
@@ -1509,10 +1518,11 @@ impl eframe::App for Viewer {
             }
             Some(Command::Depth(depth)) => {
                 if self.settings.preload_depth == depth {
-                    return;
+                    return action;
                 }
                 self.settings.preload_depth = depth;
-                self.settings_store.save(self.settings);
+                shared.settings = self.settings;
+                shared.store.save(shared.settings);
                 // Cache depth is derived policy, not a second preference source.
                 self.cache.depth = self.settings.preload_depth;
                 self.cache.trim(self.displayed_bytes());
@@ -1522,11 +1532,15 @@ impl eframe::App for Viewer {
                     self.stop_prefetch();
                 }
             }
-            Some(Command::Rate(rate)) => self.set_animation_rate(rate),
+            Some(Command::Rate(rate)) => {
+                self.set_animation_rate(rate);
+                shared.settings = self.settings;
+                shared.store.save(shared.settings);
+            }
             Some(Command::Playback) => {
                 if let Some(playback) = &mut self.animation {
                     if playback.clock.rate == crate::animation::Rate::Off {
-                        return;
+                        return action;
                     }
                     playback.clock.toggle(playback.origin.elapsed());
                     ctx.request_repaint();
@@ -1557,12 +1571,13 @@ impl eframe::App for Viewer {
                 action
                 @ (Command::CopyImage | Command::CopyFile | Command::Paste | Command::Reveal),
             ) => {
-                self.action_error = self.desktop_action(action).err();
+                self.action_error = self.desktop_action(action, shared).err();
                 ctx.request_repaint();
             }
             _ => {}
         }
         self.update_title(&ctx);
+        action
     }
 }
 
@@ -1570,6 +1585,96 @@ impl eframe::App for Viewer {
 mod tests {
     use super::*;
     use crate::{decode::LoadError, folder::tests::TempDir};
+
+    #[test]
+    fn windows_keep_selection_view_and_errors_independent_with_shared_preferences() {
+        let mut shared = Shared {
+            settings: Default::default(),
+            store: crate::settings::Store::session_only(),
+            clipboard: None,
+        };
+        let context = egui::Context::default();
+        let uploads = crate::render::Uploads::new(None);
+        let mut first = Viewer::new(
+            context.clone(),
+            None,
+            uploads.clone(),
+            shared.settings,
+            None,
+        );
+        let mut second = Viewer::new(context, None, uploads, shared.settings, None);
+        let dir = TempDir::new();
+        let first_path = dir.0.join("first.png");
+        let second_path = dir.0.join("second.png");
+        std::fs::write(&first_path, b"folder fixture").unwrap();
+        std::fs::write(&second_path, b"folder fixture").unwrap();
+        first.open(first_path.clone());
+        second.open(second_path.clone());
+        first.folder = Some(Folder::open(first_path.clone()).unwrap());
+        second.folder = Some(Folder::open(second_path.clone()).unwrap());
+        first.refresh(Some(Direction::Next));
+        assert_eq!(first.selected, Some(second_path.clone()));
+        assert_eq!(
+            second.folder.as_ref().unwrap().selected_path(),
+            Some(&second_path)
+        );
+        first.refresh(Some(Direction::Previous));
+        assert_eq!(first.selected, Some(first_path.clone()));
+        assert_eq!(second.selected, Some(second_path.clone()));
+        first.view.actual_size();
+        first.view.transform(Operation::Clockwise);
+        first.action_error = Some("copy failed".into());
+        let canvas = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(100.0, 100.0));
+        assert_eq!(first.view.scale(canvas, [1000, 1000], 1.0), 1.0);
+        assert_eq!(second.view.scale(canvas, [1000, 1000], 1.0), 0.1);
+        first
+            .view
+            .pan(egui::vec2(25.0, 10.0), canvas, [1000, 1000], 1.0);
+        assert_ne!(
+            first.view.rect(canvas, [1000, 1000], 1.0).center(),
+            canvas.center()
+        );
+        assert_eq!(
+            second.view.rect(canvas, [1000, 1000], 1.0).center(),
+            canvas.center()
+        );
+        assert_ne!(first.view.transform, second.view.transform);
+        assert!(second.action_error.is_none());
+        shared.settings.preload_depth = 3;
+        shared.settings.animation_rate = crate::animation::Rate::Fps10;
+        shared.store.save(shared.settings);
+        first.sync_settings(shared.settings);
+        second.sync_settings(shared.settings);
+        assert_eq!(first.cache.depth, 3);
+        assert_eq!(second.cache.depth, 3);
+        assert_eq!(first.selected, Some(first_path));
+        assert_eq!(second.selected, Some(second_path));
+        assert_ne!(first.view.transform, second.view.transform);
+
+        let animation_path = dir.0.join("animation.gif");
+        let mut encoder =
+            image::codecs::gif::GifEncoder::new(std::fs::File::create(&animation_path).unwrap());
+        encoder
+            .encode_frame(image::Frame::new(image::RgbaImage::from_pixel(
+                1,
+                1,
+                image::Rgba([255; 4]),
+            )))
+            .unwrap();
+        drop(encoder);
+        let version = FileVersion::read(&animation_path).unwrap();
+        let duration = std::time::Duration::from_millis(100);
+        first.animation =
+            Some(Playback::new(version.clone(), first.context.clone(), duration).unwrap());
+        second.animation = Some(Playback::new(version, second.context.clone(), duration).unwrap());
+        let playback = first.animation.as_mut().unwrap();
+        playback.clock.toggle(std::time::Duration::ZERO);
+        playback.displayed_index = 3;
+        assert!(playback.clock.paused);
+        assert!(!second.animation.as_ref().unwrap().clock.paused);
+        assert_eq!(second.animation.as_ref().unwrap().displayed_index, 0);
+        assert!(Arc::ptr_eq(&first.uploads, &second.uploads));
+    }
 
     #[test]
     fn about_identifies_clean_revision() {
@@ -2076,28 +2181,28 @@ mod tests {
     }
 
     #[test]
-    fn close_shortcut_requests_root_viewport_close_for_both_platforms() {
+    fn lifecycle_shortcuts_close_one_or_quit_all_for_both_platforms() {
         for modifiers in [
             Modifiers::MAC_CMD | Modifiers::COMMAND,
             Modifiers::CTRL | Modifiers::COMMAND,
         ] {
-            let ctx = egui::Context::default();
-            let mut output = ctx.run_ui(
-                egui::RawInput {
-                    events: vec![modified_key(Key::W, modifiers)],
-                    ..Default::default()
-                },
-                |ui| {
-                    close_shortcut(ui.ctx());
-                    assert!(!ui.ctx().input(|i| i.key_pressed(Key::W)));
-                },
-            );
-            output.textures_delta.clear();
-            assert!(
-                output.viewport_output[&egui::ViewportId::ROOT]
-                    .commands
-                    .contains(&egui::ViewportCommand::Close)
-            );
+            for key in [Key::W, Key::Q] {
+                let ctx = egui::Context::default();
+                let mut output = ctx.run_ui(
+                    egui::RawInput {
+                        events: vec![modified_key(key, modifiers)],
+                        ..Default::default()
+                    },
+                    |ui| {
+                        let action = lifecycle_action(ui.ctx(), false);
+                        assert_eq!(action.close, key == Key::W);
+                        assert_eq!(action.quit, key == Key::Q);
+                        assert!(!action.new_window);
+                        assert!(!ui.ctx().input(|i| i.key_pressed(key)));
+                    },
+                );
+                output.textures_delta.clear();
+            }
         }
     }
 
@@ -2105,12 +2210,16 @@ mod tests {
     fn close_shortcut_is_not_consumed_when_menu_text_or_dialog_owns_input() {
         for guard in 0..3 {
             let ctx = egui::Context::default();
+            crate::windows::configure_context(&ctx);
             let mut output = ctx.run_ui(
                 egui::RawInput {
                     // The synchronous native dialog owns the window's focus;
                     // Viewer::ui does not run while pick_file is active.
                     focused: guard != 2,
-                    events: vec![modified_key(Key::W, Modifiers::COMMAND)],
+                    events: vec![
+                        modified_key(Key::W, Modifiers::COMMAND),
+                        modified_key(Key::Q, Modifiers::COMMAND),
+                    ],
                     ..Default::default()
                 },
                 |ui| {
@@ -2121,8 +2230,10 @@ mod tests {
                             .memory_mut(|m| m.request_focus(egui::Id::new("text"))),
                         _ => {}
                     }
-                    close_shortcut(ui.ctx());
+                    let action = lifecycle_action(ui.ctx(), false);
+                    assert!(!action.close && !action.quit);
                     assert!(ui.ctx().input(|i| i.key_pressed(Key::W)));
+                    assert!(ui.ctx().input(|i| i.key_pressed(Key::Q)));
                 },
             );
             output.textures_delta.clear();
@@ -2132,6 +2243,28 @@ mod tests {
                     .contains(&egui::ViewportCommand::Close)
             );
         }
+    }
+
+    #[test]
+    fn os_close_is_not_suppressed_by_popup_or_focus_guard() {
+        let ctx = egui::Context::default();
+        let mut input = egui::RawInput {
+            focused: false,
+            ..Default::default()
+        };
+        input
+            .viewports
+            .get_mut(&egui::ViewportId::ROOT)
+            .unwrap()
+            .events
+            .push(egui::ViewportEvent::Close);
+        let mut output = ctx.run_ui(input, |ui| {
+            egui::Popup::open_id(ui.ctx(), egui::Id::new("menu"));
+            let action = lifecycle_action(ui.ctx(), true);
+            assert!(action.close && action.new_window);
+            assert!(!action.quit);
+        });
+        output.textures_delta.clear();
     }
 
     #[test]
@@ -2195,7 +2328,8 @@ mod tests {
                     ..Default::default()
                 },
                 |ui| {
-                    close_shortcut(ui.ctx());
+                    let action = lifecycle_action(ui.ctx(), false);
+                    assert!(!action.close && !action.quit);
                     let actual = keyboard_command(ui.ctx());
                     match (actual, expected) {
                         (None, None)
@@ -2549,12 +2683,10 @@ mod tests {
             last_title: String::new(),
             about_open: false,
             settings: crate::settings::Settings::default(),
-            settings_store: crate::settings::Store::session_only(),
             sort: Sort::default(),
             view: View::default(),
             space_pan: SpacePan::default(),
             render_state: None,
-            clipboard: None,
             action_error: None,
             action_notice: None,
             default_handler_result: None,

@@ -17,6 +17,7 @@ mod settings;
 mod tiles;
 mod transform;
 mod view;
+mod windows;
 
 use eframe::egui;
 use std::{ffi::OsStr, path::PathBuf};
@@ -81,7 +82,7 @@ fn main() -> eframe::Result {
     eframe::run_native(
         "glance",
         options,
-        Box::new(move |cc| Ok(Box::new(app::Viewer::new(cc, initial_path)))),
+        Box::new(move |cc| Ok(Box::new(windows::Application::new(cc, initial_path)))),
     )
 }
 
