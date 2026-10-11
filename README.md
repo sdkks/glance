@@ -1,5 +1,7 @@
 # glance
 
+<div align="center"><img width="256" height="256" alt="glance-enhanced-small" src="https://github.com/user-attachments/assets/65e4b674-02bc-4ef9-95bc-061822ab4a2d" /></div><br>
+
 An independently authored MIT desktop image viewer, built with Rust and
 eframe/egui's wgpu renderer. Opens raster, icon and flattened document images;
 it is not yet the complete planned viewer.
@@ -7,6 +9,16 @@ it is not yet the complete planned viewer.
 qView was studied as prior art for its interaction model and feature set. Glance
 shares no qView code or assets and is not derived from it; it is an independent
 Rust implementation under its own MIT license.
+
+Core features:
+- Minimalist and high performance
+- Preloads next image in line, configurable depth
+- Convenient navigation/rotation shortcuts
+- Pure Rust with some libavif interop.
+
+# Demo
+
+https://github.com/user-attachments/assets/c0a4556d-e430-41f1-b094-871d1d8e576d
 
 ## Quickstart
 
