@@ -1,7 +1,5 @@
-# Temporarily ignore agent prompt stuff until we complete the v1 of project.
-# Machine-local .pi settings stay untracked, but project skills are shared.
-/.pi/*
-!/.pi/skills/
+# Machine-local settings.
+/.pi/
 AGENTS.md
 .gitignore
 

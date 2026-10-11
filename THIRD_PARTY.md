@@ -33,14 +33,14 @@ README's Packaging notices section.
 
 ## App artwork provenance
 
-The app icons are independently authored, human-supplied artwork for this MIT
-app. The source of truth is `assets/icon/glance-icon-master.png`, supplied by the
-human on 2026-10-10 as `glance-enhanced.png` (2048×2048 RGBA with a real alpha
-channel; rounded edges transparent). All platform icon sizes derive from it via
-`make icons`. No third-party icon sets are used. An earlier
-attempt that cropped a supplied artwork sheet by a mismatched reference grid was
-rejected by the human and removed. The original Downloads file is not needed to
-build or regenerate the icons; no Python or extra tooling is required.
+The app icons are independently authored, maintainer-supplied artwork for this
+MIT app. The source of truth is `assets/icon/glance-icon-master.png`, supplied by
+the maintainer on 2026-10-10 as `glance-enhanced.png` (2048×2048 RGBA with a real
+alpha channel; rounded edges transparent). All platform icon sizes derive from it
+via `make icons`. No third-party icon sets are used. An earlier attempt that
+cropped a supplied artwork sheet by a mismatched reference grid was rejected by
+the maintainer and removed. The original Downloads file is not needed to build or
+regenerate the icons; no Python or extra tooling is required.
 
 ## Original AVIF transform fixtures
 
