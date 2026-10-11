@@ -48,10 +48,6 @@ fn main() -> eframe::Result {
             }
         }
     }
-    #[cfg(target_os = "macos")]
-    open_documents::register(
-        objc2::MainThreadMarker::new().expect("the viewer must start on the main thread"),
-    );
     let options = eframe::NativeOptions {
         renderer: eframe::Renderer::Wgpu,
         viewport: egui::ViewportBuilder::default()
