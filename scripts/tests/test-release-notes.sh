@@ -34,6 +34,10 @@ diff -u "$work/expected" "$work/notes"
 printf '## [0.1.0]\n\n \t\n### Added\n\n- First release\n\n \t\n\n' > "$work/changelog"
 sh scripts/release-notes.sh "$work/changelog" v0.1.0 "$work/notes" 'Fallback summary'
 diff -u "$work/expected" "$work/notes"
+# CRLF headings, body and section boundary produce the same LF-only notes.
+printf '## [0.1.0]\r\n\r\n### Added\r\n\r\n- First release\r\n\r\n## [0.0.9]\r\n- Previous release\r\n' > "$work/changelog"
+sh scripts/release-notes.sh "$work/changelog" v0.1.0 "$work/notes" 'Fallback summary'
+diff -u "$work/expected" "$work/notes"
 printf 'Fallback summary\n' > "$work/expected"
 printf '## [0.1.0]\n\n \t\n## [0.0.9]\n- Previous release\n' > "$work/changelog"
 sh scripts/release-notes.sh "$work/changelog" v0.1.0 "$work/notes" 'Fallback summary'
@@ -41,4 +45,15 @@ diff -u "$work/expected" "$work/notes"
 printf '## [0.1.01]\n- Not the requested version\n## [Unreleased]\n- Future change\n' > "$work/changelog"
 sh scripts/release-notes.sh "$work/changelog" v0.1.0 "$work/notes" 'Fallback summary'
 diff -u "$work/expected" "$work/notes"
+# A short version must not match a longer version's prefix.
+printf '## [0.10]\n- Not the requested version\n' > "$work/changelog"
+sh scripts/release-notes.sh "$work/changelog" v0.1 "$work/notes" 'Fallback summary'
+diff -u "$work/expected" "$work/notes"
+# The input is genuinely absent; require success as well as fallback content.
+if sh scripts/release-notes.sh "$work/missing-changelog" v0.1.0 "$work/notes" 'Fallback summary'; then
+    diff -u "$work/expected" "$work/notes"
+else
+    echo 'FAIL: missing changelog must exit 0.' >&2
+    exit 1
+fi
 echo 'Release notes regression checks passed'

@@ -5,7 +5,9 @@ changelog=$1
 version=${2#v}
 notes=$3
 fallback=$4
-awk -v version="$version" '
+# A failed read must use the same fallback as a missing or empty section.
+if ! awk -v version="$version" '
+    { sub(/\r$/, "") }
     /^## \[/ {
         if (found) exit
         heading = "## [" version "]"
@@ -21,7 +23,10 @@ awk -v version="$version" '
         }
     }
     END { printf "%s", body }
-' "$changelog" > "$notes"
+' "$changelog" > "$notes"; then
+    # Discard any partial extraction before selecting the fallback.
+    : > "$notes"
+fi
 if [ ! -s "$notes" ]; then
     printf '%s\n' "$fallback" > "$notes"
     echo 'Release notes: embedded summary fallback (section missing or empty).'
