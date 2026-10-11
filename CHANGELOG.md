@@ -6,6 +6,12 @@ and versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Changed
+
+- Documentation is reorganised for readers and contributors: the README is now a
+  short quickstart, the detail lives under `docs/`, and a new `CONTRIBUTING.md`
+  explains local checks, pull requests and how releases are cut.
+
 ## [0.1.0] - 2026-10-11
 
 ### Added
