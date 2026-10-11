@@ -161,6 +161,7 @@ ditto -c -k --sequesterRsrc --keepParent "$app" "$stage/$name.zip"
 mkdir "$stage/image-root"
 ditto "$app" "$stage/image-root/Glance.app"
 ln -s /Applications "$stage/image-root/Applications"
+sh scripts/macos-dmg-extras.sh "$stage/image-root"
 hdiutil create -volname "Glance $version" -srcfolder "$stage/image-root" \
     -format UDZO -imagekey zlib-level=9 "$stage/$name.dmg"
 (cd "$stage" && shasum -a 256 "$name.zip" "$name.dmg" > "$name.sha256")

@@ -6,19 +6,32 @@ Installation and source-build instructions for macOS and Linux. For everyday con
 
 Download the Apple Silicon DMG or zip from the [releases page](https://github.com/sdkks/glance/releases). macOS requires 11.0 or newer; there is no Intel or Universal build. Oldest-OS runtime compatibility has not been verified.
 
-To install, extract the zip or mount the DMG, then drag `Glance.app` to
-`/Applications` (or copy it there). Gatekeeper will still warn on first launch of
-a downloaded app: right-click `Glance.app` → Open, then click Open again. As an
-alternative, after verifying the source and checksum, remove only this app's
-quarantine attribute, then launch it normally:
+To install from the DMG, double-click `Install Glance.command`. It quits a
+running Glance, preserves an existing copy in your Trash, installs the app in
+`/Applications`, removes its download quarantine flag, and launches it. If
+`/Applications` is not writable, it tells you and uses `~/Applications` instead.
+For a manual install (including the zip), drag `Glance.app` to Applications
+instead of running it from the disk image.
 
-```sh
-xattr -d com.apple.quarantine /Applications/Glance.app
-```
+These builds are self-signed (ad-hoc signed) and not notarized. The project does
+not have a paid Apple Developer ID, so macOS blocks a downloaded copy on first
+launch. Only bypass that block if you trust the download and have checked its
+source and checksum. Choose one of three routes:
 
-These first-launch steps are needed only because the build lacks a Developer ID
-signature and notarization; an ad-hoc signature checks bundle integrity but does
-not establish a verified developer identity.
+1. Use the bundled `Install Glance.command` helper described above.
+2. After copying the app to Applications, try opening it, then go to
+   **System Settings → Privacy & Security → Open Anyway** and confirm the prompt.
+3. After copying the app to Applications, remove its download quarantine flag
+   in Terminal, then open the installed app normally:
+
+   ```sh
+   xattr -dr com.apple.quarantine /Applications/Glance.app
+   ```
+
+Use the installed path if you chose a different directory. Eject the disk image
+after installation. The helper's double-click route still needs verification
+with a real browser-downloaded release; if macOS blocks the helper, use one of
+the manual routes above.
 
 ## Linux AppImage
 

@@ -17,10 +17,11 @@ Download the Apple Silicon DMG or zip from the
 There is no Intel or Universal build. The declared minimum is macOS 11.0;
 see [installation notes](docs/installing.md#macos-releases) for compatibility caveats.
 
-Mount the DMG or extract the zip, then drag `Glance.app` to Applications.
-The app is ad-hoc signed, not Developer ID signed or notarized.
-On first launch, right-click `Glance.app` → **Open**, then click **Open** again.
-See [Installing Glance](docs/installing.md) for checksum and Gatekeeper details.
+Mount the DMG and double-click `Install Glance.command`, or extract the zip and
+drag `Glance.app` to Applications (do not run it from the disk image).
+These builds are self-signed and not notarized, so macOS blocks a downloaded copy.
+See [first-launch instructions](docs/installing.md#macos-releases) for the helper,
+System Settings → Privacy & Security → **Open Anyway**, and the Terminal alternative.
 
 ### Install on Linux
 
