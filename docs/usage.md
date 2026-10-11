@@ -75,6 +75,21 @@ A separate bounded worker decodes neighbors, so even an uncancellable neighbor
 codec cannot queue-block a foreground request. Settled images have no application
 repaint timer.
 
+## Transparency backdrop
+
+For an image with non-opaque pixels, press unmodified `b` to cycle the backdrop
+white → grey → black → white, starting from the active choice. This override is
+local to that window and image: it resets when another image is admitted (Open,
+navigation, first/last, file/folder drop), not while a replacement is still loading.
+Animation frames and SVG rerasterization retain the choice. On an opaque image,
+`b` does nothing; the usual menu, typing and window-focus guards apply.
+
+**Settings → Background color** selects the shared, persisted default: White,
+Grey or Black. It applies to newly admitted images and after relaunch, and to
+current images without a `b` override. The setting only matters for transparent
+pixels; canvas and chrome stay unchanged. Black is the existing near-black
+backdrop, so the default appearance is unchanged.
+
 ## Windows
 
 Choose **File → New Window** to open an empty, independent image window, then
@@ -207,7 +222,7 @@ normal playback does not emit per-frame logs.
 
 ## Settings persistence
 
-Preload depth, animation rate and the open-new-files choice are loaded before the
+Preload depth, animation rate, background color and the open-new-files choice are loaded before the
 first folder admission from a human-readable TOML file:
 
 - macOS: `$HOME/Library/Application Support/glance/settings.toml`
@@ -221,7 +236,9 @@ The stable key `preload-depth = 1` accepts integers 0 (Off) through 5.
 `honor-file` without discarding a valid preload depth.
 `open-new-files-in = "current-window"` accepts `current-window` or `new-window`;
 a missing, unknown or invalid value uses `current-window` without discarding the
-other valid settings. Unknown keys are tolerated on load (not retained when
+other valid settings. `background-color = "black"` accepts `white`, `grey` or
+`black`; missing, unknown or wrong-typed values use `black` without changing other
+valid preferences. Unknown keys are tolerated on load (not retained when
 saving); missing keys use defaults.
 Sort still remains session-only. Missing/malformed files or invalid depth values
 use depth 1 with a debug diagnostic, without a dialog. Missing or nonabsolute

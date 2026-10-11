@@ -129,6 +129,7 @@ Use **Playback → Pause/Resume** or **Next Frame** to inspect them.
 and **Off (first frame only)**. Space remains temporary pan, not playback.
 
 **Settings → Preload depth** controls neighbor decoding and resident history.
+For transparency, `b` cycles this image's backdrop; **Settings → Background color** saves the default (white/grey/black).
 Preload depth, animation rate and the open-new-files choice are saved on macOS and Linux; sort is not.
 See [animation playback](docs/usage.md#animation-playback),
 [preloading](docs/usage.md#preloading-and-resident-history) and

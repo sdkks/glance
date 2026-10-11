@@ -7,6 +7,7 @@ use crate::{
     folder::{Direction, FileVersion, Folder, Sort},
     loader::{Completion, Loader, Request},
     render::Image,
+    settings::Background,
     transform::Operation,
     view::View,
 };
@@ -65,6 +66,24 @@ impl<T> Display<T> {
         self.finish(generation, Ok(ready), path, view)
     }
 
+    // New document admissions reset the per-window backdrop; animation frames and
+    // SVG rerasterization use finish_tiles directly to preserve the current choice.
+    fn finish_selection(
+        &mut self,
+        generation: u64,
+        ready: T,
+        coverage: Option<crate::tiles::CoverageReady>,
+        path: Option<PathBuf>,
+        view: &mut View,
+        background_override: &mut Option<Background>,
+    ) -> bool {
+        if !self.finish_tiles(generation, ready, coverage, path, view) {
+            return false;
+        }
+        *background_override = None;
+        true
+    }
+
     fn finish(
         &mut self,
         generation: u64,
@@ -100,6 +119,8 @@ enum Command {
     NextFrame,
     Depth(usize),
     Rate(crate::animation::Rate),
+    Background(Background),
+    CycleBackground,
     #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
     OpenPolicy(crate::settings::OpenNewFiles),
     Open,
@@ -261,6 +282,7 @@ pub(crate) struct Viewer {
     pub(crate) last_title: String,
     about_open: bool,
     settings: crate::settings::Settings,
+    background_override: Option<Background>,
     sort: Sort,
     view: View,
     space_pan: SpacePan,
@@ -327,6 +349,7 @@ impl Viewer {
             last_title: "glance".into(),
             about_open: false,
             settings,
+            background_override: None,
             sort: Sort::default(),
             view: View::default(),
             space_pan: SpacePan::default(),
@@ -425,6 +448,7 @@ impl Viewer {
                             self.display.loading();
                         } else {
                             self.display.clear();
+                            self.background_override = None;
                             self.last_paint = None;
                             self.pending_image = None;
                         }
@@ -514,12 +538,13 @@ impl Viewer {
             .clone()
             .zip(self.displayed_version.clone());
         // Cached and freshly uploaded residents share the atomic admission seam.
-        if self.display.finish_tiles(
+        if self.display.finish_selection(
             generation,
             ready,
             Some(coverage),
             self.selected.clone(),
             &mut self.view,
+            &mut self.background_override,
         ) {
             let bytes = self.displayed_bytes();
             if let Some(version) = &version {
@@ -584,6 +609,17 @@ impl Viewer {
                 size[0],
                 size[1]
             );
+        }
+    }
+
+    fn background(&self) -> Background {
+        self.background_override.unwrap_or(self.settings.background)
+    }
+
+    fn cycle_background(&mut self, has_transparency: bool) {
+        if has_transparency {
+            self.background_override = Some(self.background().next());
+            self.context.request_repaint();
         }
     }
 
@@ -746,6 +782,7 @@ impl Viewer {
                         self.view.transform,
                         needed,
                         self.staging_frame,
+                        self.background(),
                     )
                     .map_err(|e| e.to_string())
             });
@@ -1076,6 +1113,9 @@ impl Viewer {
             ui.menu_button("Open new files in", |ui| {
                 open_policy_menu(ui, self.settings.open_new_files, command);
             });
+            ui.menu_button("Background color", |ui| {
+                background_menu(ui, self.settings.background, command);
+            });
             ui.menu_button("Animation rate", |ui| {
                 animation_rate_menu(ui, self.settings.animation_rate, command);
             });
@@ -1129,6 +1169,21 @@ fn keyboard_command(ctx: &egui::Context) -> Option<Command> {
     }
     if ctx.input_mut(|input| input.consume_key(Modifiers::SHIFT, Key::R)) {
         command = Some(Command::Transform(Operation::Counterclockwise));
+    }
+    // consume_key deliberately ignores extra Shift/Alt; this binding requires
+    // exactly no modifiers, so match and consume its key events explicitly.
+    if ctx.input_mut(|input| {
+        let mut pressed = false;
+        input.events.retain(|event| {
+            let matches = matches!(event, egui::Event::Key {
+                key: Key::B, pressed: true, modifiers, ..
+            } if modifiers.is_none());
+            pressed |= matches;
+            !matches
+        });
+        pressed
+    }) {
+        command = Some(Command::CycleBackground);
     }
     for (key, action) in [
         (Key::P, Command::Playback),
@@ -1195,6 +1250,15 @@ fn open_policy_menu(
     }
 }
 
+fn background_menu(ui: &mut egui::Ui, active: Background, command: &mut Option<Command>) {
+    for (background, label) in Background::ALL {
+        if ui.radio(active == background, label).clicked() {
+            *command = Some(Command::Background(background));
+            ui.close();
+        }
+    }
+}
+
 fn menu_command(ui: &mut egui::Ui, label: &str, action: Command, command: &mut Option<Command>) {
     if ui.button(label).clicked() {
         *command = Some(action);
@@ -1205,6 +1269,10 @@ fn menu_command(ui: &mut egui::Ui, label: &str, action: Command, command: &mut O
 impl Viewer {
     pub(crate) fn sync_settings(&mut self, settings: crate::settings::Settings) {
         self.settings.open_new_files = settings.open_new_files;
+        if self.settings.background != settings.background {
+            self.settings.background = settings.background;
+            self.context.request_repaint();
+        }
         self.set_animation_rate(settings.animation_rate);
         if self.settings.preload_depth != settings.preload_depth {
             self.settings.preload_depth = settings.preload_depth;
@@ -1373,6 +1441,11 @@ impl Viewer {
                                     candidate_view.transform,
                                     candidate_view.scale(canvas, size, ppp),
                                     self.staging_frame,
+                                    if self.pending_animation {
+                                        self.background()
+                                    } else {
+                                        self.settings.background
+                                    },
                                 )
                                 .map_err(|e| e.to_string())
                         });
@@ -1399,6 +1472,9 @@ impl Viewer {
                     let ppp = ctx.pixels_per_point();
                     if let Some(action) = command {
                         match action {
+                            Command::CycleBackground if crate::app::shortcuts_enabled(&ctx) => {
+                                self.cycle_background(image.has_transparency);
+                            }
                             Command::Fit => self.view.fit(),
                             Command::Reset => self.view.reset(),
                             Command::Transform(operation) => self.view.transform(operation),
@@ -1469,6 +1545,7 @@ impl Viewer {
                             self.view.transform,
                             self.view.scale(canvas, size, ppp),
                             self.staging_frame,
+                            self.background(),
                         ) {
                             Ok(Some(paint)) => self.last_paint = Some(paint.paint),
                             Ok(None) => ctx.request_repaint(),
@@ -1558,6 +1635,12 @@ impl Viewer {
                 shared.settings = self.settings;
                 shared.store.save(shared.settings);
             }
+            Some(Command::Background(background)) => {
+                self.settings.background = background;
+                shared.settings = self.settings;
+                shared.store.save(shared.settings);
+                ctx.request_repaint();
+            }
             Some(Command::Rate(rate)) => {
                 self.set_animation_rate(rate);
                 shared.settings = self.settings;
@@ -1611,6 +1694,230 @@ impl Viewer {
 mod tests {
     use super::*;
     use crate::{decode::LoadError, folder::tests::TempDir};
+
+    #[test]
+    fn background_override_is_alpha_aware_per_window_and_beats_shared_default() {
+        let context = egui::Context::default();
+        let uploads = crate::render::Uploads::new(None);
+        let mut first = Viewer::new(
+            context.clone(),
+            None,
+            uploads.clone(),
+            Default::default(),
+            None,
+        );
+        let mut second = Viewer::new(context, None, uploads, Default::default(), None);
+        let mut pixels = crate::decode::Pixels {
+            rgba: vec![0, 0, 0, 255],
+            ..Default::default()
+        };
+        first.cycle_background(pixels.has_transparency());
+        assert_eq!(first.background_override, None);
+        pixels.rgba[3] = 254;
+        for expected in [
+            Background::White,
+            Background::Grey,
+            Background::Black,
+            Background::White,
+        ] {
+            first.cycle_background(pixels.has_transparency());
+            assert_eq!(first.background(), expected);
+            assert_eq!(second.background(), Background::Black);
+            assert_eq!(second.background_override, None);
+        }
+        let settings = crate::settings::Settings {
+            background: Background::Grey,
+            ..Default::default()
+        };
+        first.sync_settings(settings);
+        second.sync_settings(settings);
+        assert_eq!(first.background(), Background::White);
+        assert_eq!(second.background(), Background::Grey);
+        second.cycle_background(true);
+        assert_eq!(second.background(), Background::Black);
+        assert_eq!(first.background(), Background::White);
+        first.cycle_background(false);
+        assert_eq!(first.background(), Background::White);
+    }
+
+    #[test]
+    fn navigation_and_open_admissions_reset_background_not_provisional_selection() {
+        let context = egui::Context::default();
+        let mut viewer = Viewer::new(
+            context,
+            None,
+            crate::render::Uploads::new(None),
+            Default::default(),
+            None,
+        );
+        let dir = TempDir::new();
+        for name in ["a.png", "b.png", "c.png"] {
+            std::fs::write(dir.0.join(name), b"folder fixture").unwrap();
+        }
+        viewer.open(dir.0.join("b.png"));
+        viewer.folder = Some(Folder::open(dir.0.join("b.png")).unwrap());
+        // Exercise the same generic admission seam used by commit_ready, without a GPU.
+        let mut display = Display::new(Status::Ready);
+        display.path = viewer.selected.clone();
+        for (direction, name) in [
+            (Direction::Next, "c.png"),
+            (Direction::Previous, "b.png"),
+            (Direction::First, "a.png"),
+            (Direction::Last, "c.png"),
+        ] {
+            viewer.background_override = Some(Background::White);
+            viewer.refresh(Some(direction));
+            assert_eq!(viewer.selected, Some(dir.0.join(name)));
+            assert_eq!(viewer.background(), Background::White);
+            display.generation = viewer.display.generation;
+            assert!(display.finish_selection(
+                display.generation,
+                (),
+                crate::tiles::ready(&[], |_| true),
+                viewer.selected.clone(),
+                &mut viewer.view,
+                &mut viewer.background_override,
+            ));
+            assert_eq!(viewer.background(), Background::Black);
+        }
+        // Open (also used by drop, Paste and folder selection) resets at admission,
+        // including a fresh admission of the same path; not on a failed/pending open.
+        viewer.background_override = Some(Background::Grey);
+        viewer.open(dir.0.join("c.png"));
+        assert_eq!(viewer.background(), Background::Grey);
+        display.generation = viewer.display.generation;
+        assert!(display.finish_selection(
+            display.generation,
+            (),
+            crate::tiles::ready(&[], |_| true),
+            viewer.selected.clone(),
+            &mut viewer.view,
+            &mut viewer.background_override,
+        ));
+        assert_eq!(viewer.background_override, None);
+    }
+
+    #[test]
+    fn incomplete_stale_and_same_document_frame_admissions_preserve_background() {
+        let mut display = Display::new(Status::Ready);
+        display.generation = 2;
+        let path = Some(PathBuf::from("image.png"));
+        display.path = path.clone();
+        let mut view = View::default();
+        let mut background = Some(Background::Grey);
+        assert!(!display.finish_selection(2, (), None, path.clone(), &mut view, &mut background));
+        assert!(!display.finish_selection(
+            1,
+            (),
+            crate::tiles::ready(&[], |_| true),
+            path.clone(),
+            &mut view,
+            &mut background
+        ));
+        assert_eq!(background, Some(Background::Grey));
+        // Animation/SVG use the frame seam, not the document-selection seam.
+        assert!(display.finish_tiles(
+            2,
+            (),
+            crate::tiles::ready(&[], |_| true),
+            path.clone(),
+            &mut view
+        ));
+        assert_eq!(background, Some(Background::Grey));
+        assert!(!display.finish(2, Err("failed load".into()), path, &mut view));
+        assert_eq!(background, Some(Background::Grey));
+    }
+
+    #[test]
+    fn background_shortcut_requires_no_modifiers_and_respects_focus_guard() {
+        for modifiers in [
+            Modifiers::NONE,
+            Modifiers::SHIFT,
+            Modifiers::ALT,
+            Modifiers::CTRL,
+            Modifiers::MAC_CMD,
+            Modifiers::COMMAND,
+        ] {
+            let ctx = egui::Context::default();
+            let mut output = ctx.run_ui(
+                egui::RawInput {
+                    events: vec![modified_key(Key::B, modifiers)],
+                    ..Default::default()
+                },
+                |ui| {
+                    let command = keyboard_command(ui.ctx());
+                    assert_eq!(
+                        matches!(command, Some(Command::CycleBackground)),
+                        modifiers.is_none()
+                    );
+                    assert_eq!(
+                        ui.ctx().input(|input| input.key_pressed(Key::B)),
+                        !modifiers.is_none()
+                    );
+                },
+            );
+            output.textures_delta.clear();
+        }
+        for guard in 0..3 {
+            let ctx = egui::Context::default();
+            let mut output = ctx.run_ui(
+                egui::RawInput {
+                    focused: guard != 2,
+                    events: vec![key_event(Key::B, false)],
+                    ..Default::default()
+                },
+                |ui| {
+                    match guard {
+                        0 => egui::Popup::open_id(ui.ctx(), egui::Id::new("menu")),
+                        1 => ui
+                            .ctx()
+                            .memory_mut(|memory| memory.request_focus(egui::Id::new("text"))),
+                        _ => {}
+                    }
+                    let command = shortcuts_enabled(ui.ctx())
+                        .then(|| keyboard_command(ui.ctx()))
+                        .flatten();
+                    assert!(command.is_none());
+                    assert!(ui.ctx().input(|input| input.key_pressed(Key::B)));
+                },
+            );
+            output.textures_delta.clear();
+        }
+    }
+
+    #[test]
+    fn background_menu_selects_all_radio_options_via_keyboard() {
+        assert_eq!(
+            Background::ALL,
+            [
+                (Background::White, "White"),
+                (Background::Grey, "Grey"),
+                (Background::Black, "Black")
+            ]
+        );
+        for (index, (background, _)) in Background::ALL.into_iter().enumerate() {
+            let ctx = egui::Context::default();
+            let mut command = None;
+            let mut keys = vec![None];
+            keys.extend(std::iter::repeat_n(Some(Key::Tab), index + 1));
+            keys.push(Some(Key::Enter));
+            for key in keys {
+                let mut output = ctx.run_ui(
+                    egui::RawInput {
+                        events: key
+                            .map(|key| vec![key_event(key, false)])
+                            .unwrap_or_default(),
+                        ..Default::default()
+                    },
+                    |ui| background_menu(ui, Background::Black, &mut command),
+                );
+                output.textures_delta.clear();
+            }
+            assert!(
+                matches!(command, Some(Command::Background(selected)) if selected == background)
+            );
+        }
+    }
 
     #[test]
     fn windows_keep_selection_view_and_errors_independent_with_shared_preferences() {
@@ -2750,6 +3057,7 @@ mod tests {
             last_title: String::new(),
             about_open: false,
             settings: crate::settings::Settings::default(),
+            background_override: None,
             sort: Sort::default(),
             view: View::default(),
             space_pan: SpacePan::default(),
