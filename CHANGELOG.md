@@ -6,6 +6,8 @@ and versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.1.1] - 2026-10-11
+
 ### Changed
 
 - Documentation is reorganised for readers and contributors: the README is now a
