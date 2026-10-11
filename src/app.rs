@@ -266,10 +266,8 @@ pub struct Viewer {
 
 impl Viewer {
     pub fn new(cc: &eframe::CreationContext<'_>, initial: Option<PathBuf>) -> Self {
-        // AppKit installs its own aevt/odoc handler while finishing launch,
-        // replacing an earlier registration. Register here, after that launch.
-        // winit owns the application delegate and panics on a foreign delegate,
-        // so replacing the delegate is not an available document-open seam.
+        // Last-resort registration if neither AppKit launch notification fired.
+        // winit owns the application delegate; leave it untouched.
         #[cfg(target_os = "macos")]
         crate::open_documents::register(
             objc2::MainThreadMarker::new().expect("the viewer must start on the main thread"),

@@ -56,6 +56,12 @@ fn main() -> eframe::Result {
             .with_icon(window_icon()),
         ..Default::default()
     };
+    // Observe AppKit launch before creating the event loop: will-finish should
+    // follow AppKit's handler setup but precede dispatch of the launch document.
+    #[cfg(target_os = "macos")]
+    open_documents::observe_launch(
+        objc2::MainThreadMarker::new().expect("the application must start on the main thread"),
+    );
     eframe::run_native(
         "glance",
         options,
