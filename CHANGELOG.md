@@ -6,6 +6,14 @@ and versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Fixed
+
+- Show the Glance icon on image formats macOS does not declare (Krita,
+  OpenRaster, PCX, SGI, PNM, WBMP, XBM, XPM, CUR and compressed SVG), by
+  exporting those type declarations with the bundle icon; macOS previously
+  rendered a generic page icon for these files. System-declared formats keep
+  their standard icons and thumbnails.
+
 ## [0.4.0] - 2026-10-11
 
 ### Added

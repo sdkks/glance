@@ -113,9 +113,20 @@ cat > "$plist" <<EOF
 <key>LSApplicationCategoryType</key><string>public.app-category.graphics-design</string>
 <key>CFBundleDocumentTypes</key><array>
 EOF
-# Keep these extension groups aligned with src/formats.rs. Imported declarations
-# describe other applications' formats; none is exported/claimed as our own.
+# Keep these extension groups aligned with src/formats.rs. Every UTI stays an
+# alternate Viewer document type; registration never claims a default role.
+# The system (CoreTypes) already declares jpeg/png/tiff/bmp/ico/icns/tga/gif/
+# webp/avif/jxl/svg/psd, so those stay imported and keep their standard icons
+# and thumbnails. macOS paints an application's icon onto documents only from
+# a winning exported type declaration (UTExportedTypeDeclarations with
+# UTTypeIconFile); imported declarations and CFBundleTypeIconFile are ignored.
+# The formats below are declared by nobody else, so exporting them replaces
+# their generic page icons with the Glance icon system-wide; an application
+# installed later that exports its own declaration (for example Krita for
+# .kra) legitimately takes the icon back.
 types='public.jpeg:jpg,jpeg public.png:png public.tiff:tif,tiff com.microsoft.bmp:bmp com.microsoft.ico:ico com.microsoft.cur:cur com.apple.icns:icns com.truevision.tga-image:tga public.pnm:pnm,pbm,pgm,ppm,pam public.wbmp:wbmp public.xbm:xbm public.xpm:xpm public.pcx:pcx public.sgi-image:sgi,bw,rgb,rgba com.compuserve.gif:gif org.webmproject.webp:webp public.avif:avif public.jpeg-xl:jxl public.svg-image:svg public.svgz:svgz com.adobe.photoshop-image:psd org.krita.kra:kra org.openraster.ora:ora'
+exported_types='com.microsoft.cur:cur public.pnm:pnm,pbm,pgm,ppm,pam public.wbmp:wbmp public.xbm:xbm public.xpm:xpm public.pcx:pcx public.sgi-image:sgi,bw,rgb,rgba public.svgz:svgz org.krita.kra:kra org.openraster.ora:ora'
+exported_utis=$(for type in $exported_types; do printf '%s ' "${type%%:*}"; done)
 for type in $types; do
     uti=${type%%:*}
     printf '<dict><key>CFBundleTypeName</key><string>%s</string><key>CFBundleTypeRole</key><string>Viewer</string><key>LSHandlerRank</key><string>Alternate</string><key>LSItemContentTypes</key><array><string>%s</string></array></dict>\n' "$uti" "$uti" >> "$plist"
@@ -123,8 +134,19 @@ done
 printf '</array><key>UTImportedTypeDeclarations</key><array>\n' >> "$plist"
 for type in $types; do
     uti=${type%%:*}
+    case " $exported_utis " in *" $uti "*) continue ;; esac
     extensions=${type#*:}
     printf '<dict><key>UTTypeIdentifier</key><string>%s</string><key>UTTypeConformsTo</key><array><string>public.image</string></array><key>UTTypeTagSpecification</key><dict><key>public.filename-extension</key><array>' "$uti" >> "$plist"
+    old_ifs=$IFS; IFS=,
+    for ext in $extensions; do printf '<string>%s</string>' "$ext" >> "$plist"; done
+    IFS=$old_ifs
+    printf '</array></dict></dict>\n' >> "$plist"
+done
+printf '</array><key>UTExportedTypeDeclarations</key><array>\n' >> "$plist"
+for type in $exported_types; do
+    uti=${type%%:*}
+    extensions=${type#*:}
+    printf '<dict><key>UTTypeIdentifier</key><string>%s</string><key>UTTypeConformsTo</key><array><string>public.image</string></array><key>UTTypeIconFile</key><string>glance.icns</string><key>UTTypeTagSpecification</key><dict><key>public.filename-extension</key><array>' "$uti" >> "$plist"
     old_ifs=$IFS; IFS=,
     for ext in $extensions; do printf '<string>%s</string>' "$ext" >> "$plist"; done
     IFS=$old_ifs

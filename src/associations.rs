@@ -166,19 +166,24 @@ mod tests {
         let packaged_mimes: BTreeSet<_> = mime_line.split(';').filter(|s| !s.is_empty()).collect();
         assert_eq!(packaged_mimes, TYPES.iter().map(|t| t.mime).collect());
         let script = include_str!("../scripts/package-macos.sh");
-        let types = script
-            .lines()
-            .find_map(|line| line.strip_prefix("types='"))
-            .unwrap()
-            .strip_suffix('\'')
-            .unwrap();
-        let packaged: BTreeMap<_, BTreeSet<_>> = types
-            .split_whitespace()
-            .map(|entry| {
-                let (uti, extensions) = entry.split_once(':').unwrap();
-                (uti, extensions.split(',').collect())
-            })
-            .collect();
+        let parse_packaging_types = |prefix: &str| -> BTreeMap<&str, BTreeSet<&str>> {
+            let line = script
+                .lines()
+                .find_map(|line| line.strip_prefix(prefix))
+                .unwrap_or_else(|| panic!("missing {prefix} list in package-macos.sh"));
+            let types = line
+                .strip_suffix('\'')
+                .unwrap_or_else(|| panic!("malformed {prefix} list in package-macos.sh"));
+            types
+                .split_whitespace()
+                .map(|entry| {
+                    let (uti, extensions) = entry.split_once(':').unwrap();
+                    (uti, extensions.split(',').collect())
+                })
+                .collect()
+        };
+        let packaged = parse_packaging_types("types='");
+        let exported = parse_packaging_types("exported_types='");
         let mut declared: BTreeMap<_, BTreeSet<_>> = BTreeMap::new();
         for entry in TYPES {
             declared
@@ -192,5 +197,16 @@ mod tests {
             }
         }
         assert_eq!(packaged, declared);
+        // Exported (icon-bearing) type declarations must restate exact
+        // extension groups for a subset of the packaged UTIs; every other
+        // packaged UTI stays an imported declaration.
+        assert!(!exported.is_empty());
+        for (uti, extensions) in &exported {
+            assert_eq!(
+                packaged.get(uti),
+                Some(extensions),
+                "exported extensions for {uti} must match the packaged group"
+            );
+        }
     }
 }

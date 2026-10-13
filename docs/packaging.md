@@ -118,10 +118,26 @@ namespace, not a claim of domain ownership). Display name is Glance, executable
 is `glance`, and the icon is `Contents/Resources/glance.icns`. Both bundle version
 keys use the Cargo version. The declared and compiled minimum macOS version is
 **11.0**, the first Apple Silicon macOS;
-actual oldest-OS compatibility remains unverified. Imported image UTIs cover
+actual oldest-OS compatibility remains unverified. Image document types cover
 all eligible extensions in `src/formats.rs` (including flattened documents),
 with role **Viewer** and handler rank **Alternate**, never Owner/Default.
-Registration does not change existing default associations. Glance handles native
+Registration does not change existing default associations. Thirteen UTIs are
+declared by macOS itself (`public.jpeg`, `public.png`, `public.tiff`,
+`com.microsoft.bmp`, `com.microsoft.ico`, `com.apple.icns`,
+`com.truevision.tga-image`, `com.compuserve.gif`, `org.webmproject.webp`,
+`public.avif`, `public.jpeg-xl`, `public.svg-image`,
+`com.adobe.photoshop-image`); these stay imported declarations and keep their
+standard icons and thumbnails. The other ten (`public.pcx`, `public.pnm`,
+`public.wbmp`, `public.xbm`, `public.xpm`, `public.sgi-image`, `public.svgz`,
+`com.microsoft.cur`, `org.krita.kra`, `org.openraster.ora`) are not declared by
+any other application and are **exported** declarations carrying
+`UTTypeIconFile` = `glance.icns`. Finder paints an application's icon onto
+documents only from a winning exported declaration, so without it these formats
+render a generic page icon; exporting attaches the Glance icon to the type
+system-wide and does not change which application opens it. An application
+installed later that exports its own declaration (for example Krita for `.kra`)
+takes the icon back. Finder-observed on macOS 27.0.1 only; older macOS behavior
+remains unverified. Glance handles native
 Finder document-open events: double-clicking an associated image or dropping
 files onto its Dock icon opens the first local document, whether Glance is
 already running or launched by the event. CLI image arguments retain precedence
