@@ -6,6 +6,8 @@ and versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.4.1] - 2026-10-13
+
 ### Fixed
 
 - Show the Glance icon on image formats macOS does not declare (Krita,
