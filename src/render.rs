@@ -38,8 +38,8 @@ pub struct Image {
     uploads: Arc<Mutex<Uploads>>,
 }
 
-// One batch (at most 8 MiB, plus one CPU gutter copy of at most 8 MiB) may
-// be in flight for the entire viewer, including cancelled selections. Never
+// One batch may be in flight for the entire viewer, including cancelled selections.
+// Queued payload plus the current CPU gutter stays within 16 MiB. Never
 // accumulate driver staging by submitting faster than the GPU retires it.
 #[derive(Default)]
 pub struct Uploads {
@@ -147,16 +147,23 @@ pub(crate) struct UploadBatch {
 }
 impl UploadBatch {
     pub(crate) fn push(&mut self, bytes: usize) -> Result<bool, LoadError> {
-        let limit = tiles::STAGING_BYTES / 2;
-        if bytes > limit {
+        if bytes > tiles::STAGING_BYTES / 2 {
             return Err(LoadError::ResourceLimit(
-                "GPU tile exceeds 8 MiB upload batch".into(),
+                "GPU tile exceeds 8 MiB upload limit".into(),
             ));
         }
-        if bytes > limit - self.bytes {
+        let Some(queued) = self.bytes.checked_add(bytes) else {
+            return Ok(false);
+        };
+        // write_texture copies the current gutter before it can be dropped:
+        // old queued payload + new queued tile + current CPU gutter.
+        if queued
+            .checked_add(bytes)
+            .is_none_or(|peak| peak > tiles::STAGING_BYTES)
+        {
             return Ok(false);
         }
-        self.bytes += bytes;
+        self.bytes = queued;
         Ok(true)
     }
 }
@@ -408,6 +415,9 @@ impl Image {
                     );
                     Ok(texture.create_view(&Default::default()))
                 })?;
+                // The native write has copied the bytes; do not retain CPU
+                // gutters alongside the rest of the queued batch.
+                drop(data);
                 cache.tiles.insert(
                     *key,
                     Resident {
@@ -664,32 +674,126 @@ impl egui_wgpu::CallbackTrait for Paint {
 #[cfg(test)]
 mod tests {
     use super::*;
+    // Check the peak of every accepted write, not twice the final queued bytes:
+    // earlier CPU gutters have already been dropped.
+    fn push_checked(batch: &mut UploadBatch, bytes: usize) -> bool {
+        let before = batch.bytes;
+        let accepted = batch.push(bytes).unwrap();
+        if accepted {
+            assert_eq!(batch.bytes, before + bytes);
+            assert!(before + 2 * bytes <= tiles::STAGING_BYTES);
+            assert!(batch.bytes + bytes <= tiles::STAGING_BYTES);
+        } else {
+            assert_eq!(batch.bytes, before);
+        }
+        accepted
+    }
+
     #[test]
     fn batches_pack_u8_and_high_depth_tiles_by_bytes() {
-        let limit = tiles::STAGING_BYTES / 2;
         let full = tiles::Tile {
             origin: [0, 0],
             size: [1022, 1022],
         };
+        let u8_bytes = full.bytes_at_depth(4);
+        let high_bytes = full.bytes_at_depth(8);
         let mut u8_batch = UploadBatch::default();
-        assert!(u8_batch.push(full.bytes_at_depth(4)).unwrap());
-        assert!(u8_batch.push(full.bytes_at_depth(4)).unwrap());
-        assert_eq!(u8_batch.bytes, limit);
-        assert!(!u8_batch.push(1).unwrap());
-        let mut high_depth = UploadBatch::default();
-        assert!(high_depth.push(full.bytes_at_depth(8)).unwrap());
-        assert_eq!(high_depth.bytes, limit);
-        assert!(!high_depth.push(1).unwrap());
-        assert!(UploadBatch::default().push(limit + 1).is_err());
-        // Mixed edge sizes use remaining bytes, not a fixed tile count.
-        let mut edges = UploadBatch::default();
-        for bytes in [limit - 100, 40, 59, 1] {
-            assert!(edges.push(bytes).unwrap());
+        for _ in 0..3 {
+            assert!(push_checked(&mut u8_batch, u8_bytes));
         }
-        assert_eq!(edges.bytes, limit);
-        assert!(!edges.push(1).unwrap());
-        assert_eq!(edges.bytes, limit);
-        assert!(edges.bytes + full.bytes_at_depth(8) <= tiles::STAGING_BYTES);
+        assert_eq!(u8_batch.bytes + u8_bytes, tiles::STAGING_BYTES);
+        assert!(!push_checked(&mut u8_batch, u8_bytes));
+
+        let mut mixed = UploadBatch::default();
+        assert!(push_checked(&mut mixed, high_bytes));
+        assert!(!push_checked(&mut mixed, high_bytes));
+        // An 8 MiB tile does not end the batch: a 4 MiB tile fits exactly.
+        assert!(push_checked(&mut mixed, u8_bytes));
+        let edge = tiles::Tile {
+            origin: [1022, 0],
+            size: [254, 1022],
+        };
+        assert!(push_checked(&mut mixed, edge.bytes_at_depth(8)));
+        assert!(push_checked(&mut mixed, edge.bytes_at_depth(4)));
+        assert!(!push_checked(&mut mixed, u8_bytes));
+    }
+
+    #[test]
+    fn batch_exact_bound_overflow_and_errors_preserve_queued_payload() {
+        let limit = tiles::STAGING_BYTES;
+        // Both the queued sum and the transient peak use checked arithmetic.
+        for (queued, bytes) in [(limit - 2, 2), (usize::MAX, 1), (usize::MAX - 1, 1)] {
+            let mut batch = UploadBatch { bytes: queued };
+            assert!(!push_checked(&mut batch, bytes));
+        }
+        let mut batch = UploadBatch { bytes: limit - 2 };
+        assert!(push_checked(&mut batch, 1));
+        assert_eq!(batch.bytes, limit - 1);
+        assert!(!push_checked(&mut batch, 1));
+        for bytes in [limit / 2 + 1, usize::MAX] {
+            let before = batch.bytes;
+            assert!(batch.push(bytes).is_err());
+            assert_eq!(batch.bytes, before);
+        }
+    }
+
+    #[test]
+    fn full_and_half_1280x2052_levels_pack_actual_gutters_without_accumulating_them() {
+        let core = tiles::core(16384).unwrap();
+        for (half, expected_batches, old_batches) in [(false, 1, 2), (true, 3, 4)] {
+            let levels: Vec<_> = [[1280, 2052], [640, 1026]]
+                .into_iter()
+                .map(|size| levels::Level {
+                    size,
+                    half,
+                    rgba: vec![0; size[0] * size[1] * if half { 8 } else { 4 }],
+                })
+                .collect();
+            // Same full-level then half-level, row-major ordering as callback.
+            let keys: Vec<_> = levels
+                .iter()
+                .enumerate()
+                .flat_map(|(i, level)| tiles::coverage(level.size, i, core, [0.0, 0.0, 1.0, 1.0]))
+                .collect();
+            assert_eq!(keys.len(), 8);
+            let mut batch = UploadBatch::default();
+            let mut batches = 1;
+            let mut old_queued = 0;
+            let mut old_count = 1;
+            let mut cpu_payload = 0;
+            let mut peak = 0;
+            for key in keys {
+                let level = &levels[key.level];
+                let tile = tiles::tile(level.size, key, core);
+                let bytes = tile.bytes_at_depth(level.bytes_per_pixel());
+                if !push_checked(&mut batch, bytes) {
+                    batch = UploadBatch::default();
+                    batches += 1;
+                    assert!(push_checked(&mut batch, bytes));
+                }
+                if old_queued + bytes > tiles::STAGING_BYTES / 2 {
+                    old_count += 1;
+                    old_queued = 0;
+                }
+                old_queued += bytes;
+                // Use real gutter allocations, not invented performance bytes.
+                assert_eq!(cpu_payload, 0);
+                let data = tiles::gutter(level, tile).unwrap();
+                assert_eq!(data.len(), bytes);
+                cpu_payload += data.len();
+                peak = peak.max(batch.bytes + cpu_payload);
+                assert!(batch.bytes + cpu_payload <= tiles::STAGING_BYTES);
+                drop(data); // mirrors stage: CPU allocation ends after each write
+                cpu_payload -= bytes;
+            }
+            assert_eq!(cpu_payload, 0);
+            assert_eq!(batches, expected_batches);
+            assert_eq!(old_count, old_batches);
+            if !half {
+                assert_eq!(batch.bytes, 13_214_928);
+                assert_eq!(peak, 15_829_152);
+            }
+        }
     }
 
     #[test]

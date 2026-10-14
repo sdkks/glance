@@ -90,10 +90,17 @@ level are uploaded. GPU textures have a **128 MiB per-renderer LRU budget**;
 offscreen tiles are evicted first, and the complete current visible set is protected.
 A viewport whose mandatory visible set exceeds that budget reports a named resource
 error rather than displaying partial detail. CPU gutter buffers and queued uploads
-are bounded to **16 MiB of payload**: multiple tiles are written into one batch
-of at most **8 MiB** (including gutters), alongside one transient CPU gutter of
-at most **8 MiB**. A maximum-size high-depth tile fills a batch; U8 and edge tiles
-can share it. Only one batch may be in flight across all windows and selections,
+are bounded to **16 MiB of payload**. Each tile is admitted only when the
+previously queued payload plus **twice the current tile's bytes** fits: one copy
+is the CPU gutter, the other is copied into native staging by `write_texture`.
+The CPU gutter is dropped after that write, before the next tile is prepared;
+CPU gutters do not accumulate. The maximum single tile remains **8 MiB**.
+Queued payload may exceed 8 MiB: three full 4 MiB U8 tiles fit in one batch
+(the third write peaks at 16 MiB), while a fourth does not. A full 8 MiB
+high-depth tile can share a batch with smaller tiles, but not another full
+8 MiB tile. Backend row padding and driver allocations are outside this
+application-payload accounting. Only one batch may be in flight across all
+windows and selections,
 including cancelled loads, and no second batch starts in the same UI pass.
 The batch is submitted once and drained before the next batch. Coverage is
 withheld until a later pass observes completion of every required tile. Partial
