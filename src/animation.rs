@@ -152,18 +152,53 @@ fn gif_loops(bytes: &[u8]) -> Result<LoopCount, LoadError> {
 
 type ColorMetadata = (Option<Vec<u8>>, Orientation, Option<String>);
 
-pub struct Stream {
-    frames: image::Frames<'static>,
+mod webp;
+
+fn check_canvas((w, h): (u32, u32)) -> Result<(), LoadError> {
+    // Reserve three normalized frames (source + levels <= 3x RGBA),
+    // plus three RGBA compositor/reference buffers inside the codec.
+    if w == 0
+        || h == 0
+        || w > MAX_DIMENSION
+        || h > MAX_DIMENSION
+        || u64::from(w) * u64::from(h) * 4 > MAX_DECODED_BYTES / 12
+    {
+        return Err(LoadError::ResourceLimit(
+            "Animation frames and compositor reserve exceed 512 MiB".into(),
+        ));
+    }
+    Ok(())
+}
+
+fn prepare(
+    format: crate::formats::Format,
+    bytes: &[u8],
+) -> Result<std::borrow::Cow<'_, [u8]>, LoadError> {
+    if matches!(format, crate::formats::Format::Standard(ImageFormat::WebP)) {
+        webp::prepare(bytes)
+    } else {
+        Ok(std::borrow::Cow::Borrowed(bytes))
+    }
+}
+
+enum Frames<'a> {
+    Image(image::Frames<'a>),
+    WebP(webp::Native<'a>),
+}
+
+pub struct Stream<'a> {
+    frames: Frames<'a>,
     pub loops: LoopCount,
     icc: Option<Vec<u8>>,
     orientation: Orientation,
     warning: Option<String>,
 }
 
-impl Stream {
+impl<'a> Stream<'a> {
+    // The scoped input owner returned by prepare must outlive this stream.
     pub fn open(
         format: crate::formats::Format,
-        bytes: Arc<[u8]>,
+        bytes: &'a [u8],
     ) -> Result<Option<Self>, LoadError> {
         let mut limits = Limits::default();
         limits.max_image_width = Some(MAX_DIMENSION);
@@ -174,19 +209,7 @@ impl Stream {
             limits: Limits,
         ) -> Result<ColorMetadata, LoadError> {
             decoder.set_limits(limits)?;
-            let (w, h) = decoder.dimensions();
-            // Reserve three normalized frames (source + levels <= 3x RGBA),
-            // plus three RGBA compositor/reference buffers inside the codec.
-            if w == 0
-                || h == 0
-                || w > MAX_DIMENSION
-                || h > MAX_DIMENSION
-                || u64::from(w) * u64::from(h) * 4 > MAX_DECODED_BYTES / 12
-            {
-                return Err(LoadError::ResourceLimit(
-                    "Animation frames and compositor reserve exceed 512 MiB".into(),
-                ));
-            }
+            check_canvas(decoder.dimensions())?;
             let (icc, warning) = match decoder.icc_profile() {
                 Ok(p) => (p, None),
                 Err(_) => (None, Some(crate::color::FALLBACK.to_owned())),
@@ -194,7 +217,7 @@ impl Stream {
             Ok((icc, decoder.orientation()?, warning))
         }
         let gif_loops = if matches!(format, crate::formats::Format::Standard(ImageFormat::Gif)) {
-            Some(gif_loops(&bytes)?)
+            Some(gif_loops(bytes)?)
         } else {
             None
         };
@@ -204,7 +227,13 @@ impl Stream {
                 let mut d = image::codecs::gif::GifDecoder::new(cursor)?;
                 let (icc, orientation, warning) = metadata(&mut d, limits)?;
                 let loops = gif_loops.expect("GIF metadata checked");
-                (d.into_frames(), loops, icc, orientation, warning)
+                (
+                    Frames::Image(d.into_frames()),
+                    loops,
+                    icc,
+                    orientation,
+                    warning,
+                )
             }
             crate::formats::Format::Standard(ImageFormat::Png) => {
                 let mut d = image::codecs::png::PngDecoder::new(cursor)?;
@@ -214,7 +243,13 @@ impl Stream {
                 let (icc, orientation, warning) = metadata(&mut d, limits)?;
                 let d = d.apng()?;
                 let loops = d.loop_count();
-                (d.into_frames(), loops, icc, orientation, warning)
+                (
+                    Frames::Image(d.into_frames()),
+                    loops,
+                    icc,
+                    orientation,
+                    warning,
+                )
             }
             crate::formats::Format::Standard(ImageFormat::WebP) => {
                 let mut d = image::codecs::webp::WebPDecoder::new(cursor)?;
@@ -223,7 +258,15 @@ impl Stream {
                 }
                 let (icc, orientation, warning) = metadata(&mut d, limits)?;
                 let loops = d.loop_count();
-                (d.into_frames(), loops, icc, orientation, warning)
+                let dimensions = d.dimensions();
+                let preflight = webp::Preflight::read(bytes, dimensions)?;
+                let frames = if preflight.use_native(dimensions) {
+                    drop(d); // Metadata only; never decode pixels with both backends.
+                    Frames::WebP(webp::Native::new(bytes, dimensions, preflight)?)
+                } else {
+                    Frames::Image(d.into_frames())
+                };
+                (frames, loops, icc, orientation, warning)
             }
             _ => return Ok(None),
         };
@@ -237,12 +280,23 @@ impl Stream {
     }
 
     pub fn next(&mut self) -> Result<Option<Pixels>, LoadError> {
-        let Some(frame) = self.frames.next() else {
-            return Ok(None);
+        let (rgba, timing) = match &mut self.frames {
+            Frames::Image(frames) => {
+                let Some(frame) = frames.next() else {
+                    return Ok(None);
+                };
+                let frame = frame?;
+                let timing = encoded_delay(Some(frame.delay().numer_denom_ms()));
+                (frame.into_buffer(), timing)
+            }
+            Frames::WebP(frames) => {
+                let Some(frame) = frames.next()? else {
+                    return Ok(None);
+                };
+                frame
+            }
         };
-        let frame = frame?;
-        let timing = encoded_delay(Some(frame.delay().numer_denom_ms()));
-        let mut image = image::DynamicImage::ImageRgba8(frame.into_buffer());
+        let mut image = image::DynamicImage::ImageRgba8(rgba);
         image.apply_orientation(self.orientation);
         let size = [image.width() as usize, image.height() as usize];
         let mut rgba = image.into_rgba8().into_raw();
@@ -420,9 +474,10 @@ impl Drop for Worker {
 fn run(shared: &Shared, version: &crate::folder::FileVersion) -> Result<(), LoadError> {
     let path = &version.path;
     let format = crate::formats::format(path).ok_or(LoadError::Unsupported)?;
-    let bytes: Arc<[u8]> = crate::decode::read_encoded(path)?.into();
+    let bytes = crate::decode::read_encoded(path)?;
+    let prepared = prepare(format, &bytes)?;
     let reopen = || {
-        Stream::open(format, Arc::clone(&bytes))?
+        Stream::open(format, &prepared)?
             .ok_or_else(|| LoadError::Malformed("Animation changed to a static image".into()))
     };
     let mut stream = reopen()?;
@@ -533,7 +588,8 @@ fn run(shared: &Shared, version: &crate::folder::FileVersion) -> Result<(), Load
 }
 
 pub fn first(format: crate::formats::Format, bytes: &[u8]) -> Result<Option<Pixels>, LoadError> {
-    match Stream::open(format, Arc::from(bytes))? {
+    let prepared = prepare(format, bytes)?;
+    match Stream::open(format, &prepared)? {
         Some(mut stream) => stream
             .next()?
             .map(Some)

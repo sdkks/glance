@@ -569,3 +569,27 @@ Original alpha.png is an independently generated 5×3 16-bit RGBA constant RGB
 (32768,16384,8192), with a five-step alpha ramp. alpha8/10/12.avif were encoded
 with avifenc 1.4.2, --lossless -d 8/10/12 -y 444 --cicp 1/13/0. The fixture
 encoder is a developer tool, not a new runtime dependency.
+
+## Native animated WebP test build
+
+Animated WebP uses `webp-animation 0.10.0` (MIT OR Apache-2.0), with its `static`
+feature and without its optional `image` adapter. The locked graph resolves
+`libwebp-sys2 0.2.0` through `libwebp-sys2 0.1.11` (both BSD-3-Clause). The latter
+bundles unmodified libwebp **1.5.0** under BSD-3-Clause. Its build uses the existing
+`cc 1.7.0` and `pkg-config 0.3.34`; the added Windows build dependency is
+`vcpkg 0.2.15` (MIT OR Apache-2.0). No license-policy exception is added.
+
+Cargo compiles bundled native code on macOS/Linux: no system libwebp installation
+or new application build script is required. The upstream build includes encoder,
+decoder, mux and demux sources; the application uses only its animation decoder.
+The existing recursive notices generator collects the wrapper licenses, both sys
+crate licenses, and `libwebp-sys2-0.1.11/c_src/COPYING` verbatim. Preserve those
+copyright notices, conditions and disclaimers with any redistributed binary.
+Native decoding runs in-process; Rust panic containment does not contain C faults.
+
+Native routing is limited to canvas area ≤8,294,400 pixels and total encoded frame
+duration ≤2,147,483,647 ms. Above either bound the existing image-webp decoder is
+retained, with the same application resource limits. Metadata/color/orientation
+still use the existing normalization path. For compatibility with image-webp's
+no-background-override behavior, native input clears disposal flags in a bounded
+in-memory copy when needed; it never edits the file. Static WebP is unchanged.

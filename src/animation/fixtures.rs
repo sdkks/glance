@@ -6,6 +6,8 @@ use crate::{
 use image::{ImageEncoder, Rgba, RgbaImage};
 use std::io::Cursor;
 
+mod webp_tests;
+
 fn gif(repeat: Option<image::codecs::gif::Repeat>) -> Vec<u8> {
     let mut bytes = Vec::new();
     {
@@ -197,7 +199,7 @@ fn codecs_composition_timing_and_play_counts() {
         (ImageFormat::Png, apng(2), 2, 2),
         (ImageFormat::WebP, webp(3), 3, 3),
     ] {
-        let mut stream = Stream::open(Format::Standard(format), bytes.into())
+        let mut stream = Stream::open(Format::Standard(format), &bytes)
             .unwrap()
             .unwrap();
         assert!(matches!(stream.loops,LoopCount::Finite(n) if n.get()==plays));
@@ -235,7 +237,7 @@ fn gif_encoded_centisecond_timing_matrix() {
                 .unwrap();
         }
     }
-    let mut stream = Stream::open(Format::Standard(ImageFormat::Gif), bytes.into())
+    let mut stream = Stream::open(Format::Standard(ImageFormat::Gif), &bytes)
         .unwrap()
         .unwrap();
     for (cs, ms) in matrix {
@@ -358,13 +360,13 @@ fn truncation_version_change_and_static_detection() {
     let bytes = gif(None);
     for cut in 0..bytes.len() {
         let result = std::panic::catch_unwind(|| {
-            Stream::open(Format::Standard(ImageFormat::Gif), Arc::from(&bytes[..cut]))
+            Stream::open(Format::Standard(ImageFormat::Gif), &bytes[..cut])
         });
         assert!(result.is_ok());
         assert!(result.unwrap().is_err());
     }
     assert!(
-        Stream::open(Format::Standard(ImageFormat::Png), png([0; 4], 16).into())
+        Stream::open(Format::Standard(ImageFormat::Png), &png([0; 4], 16))
             .unwrap()
             .is_none()
     );
@@ -485,7 +487,7 @@ fn animation_reserve_rejects_large_canvas_before_frame_allocation() {
     bytes[6..8].copy_from_slice(&4096u16.to_le_bytes());
     bytes[8..10].copy_from_slice(&4096u16.to_le_bytes());
     assert!(matches!(
-        Stream::open(Format::Standard(ImageFormat::Gif), bytes.into()),
+        Stream::open(Format::Standard(ImageFormat::Gif), &bytes),
         Err(LoadError::ResourceLimit(_))
     ));
 }
@@ -495,7 +497,7 @@ fn corrupt_animation_frames_error_without_panic() {
     let mut bytes = apng(0);
     let at = bytes.windows(4).position(|w| w == b"fdAT").unwrap();
     bytes[at + 8] ^= 0xff; // corrupt compressed second frame and its checksum
-    let mut stream = Stream::open(Format::Standard(ImageFormat::Png), bytes.into())
+    let mut stream = Stream::open(Format::Standard(ImageFormat::Png), &bytes)
         .unwrap()
         .unwrap();
     let first = stream.next().unwrap().unwrap();
