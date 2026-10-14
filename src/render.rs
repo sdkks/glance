@@ -38,9 +38,9 @@ pub struct Image {
     uploads: Arc<Mutex<Uploads>>,
 }
 
-// One tile (at most 8 MiB, plus its CPU gutter copy) may be in flight for
-// the entire viewer, including cancelled selections. Never accumulate driver
-// staging by submitting faster than the GPU retires it.
+// One batch (at most 8 MiB, plus one CPU gutter copy of at most 8 MiB) may
+// be in flight for the entire viewer, including cancelled selections. Never
+// accumulate driver staging by submitting faster than the GPU retires it.
 #[derive(Default)]
 pub struct Uploads {
     frame: Option<u64>,
@@ -109,8 +109,24 @@ impl Uploads {
         *self.failure.lock().unwrap() = Some("Injected upload/device failure".into());
     }
 
+    // Always drain even a partially written batch before returning a local error.
+    // Only a failed/uncertain submission poisons the viewer; a successful drain
+    // keeps the shared slot pending until completion, then allows later staging.
+    fn finish_batch(
+        &self,
+        staged: Result<(), LoadError>,
+        submit: impl FnOnce() -> Result<(), LoadError>,
+    ) -> Result<(), LoadError> {
+        let submitted = submit();
+        if let Err(error) = &submitted {
+            *self.failure.lock().expect("device failure lock poisoned") = Some(error.to_string());
+        }
+        staged.and(submitted)
+    }
+
     pub(crate) fn available(&self, frame: u64) -> bool {
-        self.submitted_frame != Some(frame)
+        self.check_failure().is_ok()
+            && self.submitted_frame != Some(frame)
             && self
                 .pending
                 .as_ref()
@@ -120,6 +136,28 @@ impl Uploads {
     pub(crate) fn submitted(&mut self, frame: u64, done: Arc<AtomicBool>) {
         self.submitted_frame = Some(frame);
         self.pending = Some(done);
+    }
+}
+
+// Payload includes texture gutters. Only one transient CPU gutter exists while
+// write_texture copies each tile into native staging; no batch of CPU copies.
+#[derive(Default)]
+pub(crate) struct UploadBatch {
+    pub(crate) bytes: usize,
+}
+impl UploadBatch {
+    pub(crate) fn push(&mut self, bytes: usize) -> Result<bool, LoadError> {
+        let limit = tiles::STAGING_BYTES / 2;
+        if bytes > limit {
+            return Err(LoadError::ResourceLimit(
+                "GPU tile exceeds 8 MiB upload batch".into(),
+            ));
+        }
+        if bytes > limit - self.bytes {
+            return Ok(false);
+        }
+        self.bytes += bytes;
+        Ok(true)
     }
 }
 
@@ -309,82 +347,91 @@ impl Image {
                 required += bytes(key);
             }
         }
-        for key in &protected {
-            if cache.tiles.contains_key(key) {
-                continue;
-            }
+        let mut batch = UploadBatch::default();
+        let done = Arc::new(AtomicBool::new(false));
+        let staged = (|| {
             if !uploads.available(frame) {
-                break;
+                return Ok(());
             }
-            let needed = bytes(key);
-            while cache.tiles.values().map(|t| t.bytes).sum::<usize>() + needed
-                > tiles::RESIDENT_BYTES
-            {
-                let recency: Vec<_> = cache.tiles.iter().map(|(k, t)| (*k, t.age)).collect();
-                let victim = tiles::eviction(&recency, &protected)
-                    .ok_or_else(|| LoadError::ResourceLimit("GPU residency exhausted".into()))?;
-                cache.tiles.remove(&victim);
-            }
-            let level = &self.pixels.levels[key.level];
-            let tile = tiles::tile(level.size, *key, self.core);
-            let data = tiles::gutter(level, tile)?;
-            if data.len() > tiles::STAGING_BYTES {
-                return Err(LoadError::ResourceLimit(
-                    "GPU tile staging exceeds 16 MiB".into(),
-                ));
-            }
-            // Submission is asynchronous. The coverage witness is withheld until
-            // a later frame polls and observes this submission's completion.
-            let done = Arc::new(AtomicBool::new(false));
-            let texture = checked(&state.device, || {
-                let texture = state.device.create_texture(&wgpu::TextureDescriptor {
-                    label: Some("linear-premultiplied sRGB tile with gutter"),
-                    size: wgpu::Extent3d {
-                        width: (tile.size[0] + 2) as u32,
-                        height: (tile.size[1] + 2) as u32,
-                        depth_or_array_layers: 1,
+            for key in &protected {
+                if cache.tiles.contains_key(key) {
+                    continue;
+                }
+                let needed = bytes(key);
+                if !batch.push(needed)? {
+                    break;
+                }
+                // Claim the viewer-wide slot before any fallible staging work.
+                uploads.submitted(frame, Arc::clone(&done));
+                while cache.tiles.values().map(|t| t.bytes).sum::<usize>() + needed
+                    > tiles::RESIDENT_BYTES
+                {
+                    let recency: Vec<_> = cache.tiles.iter().map(|(k, t)| (*k, t.age)).collect();
+                    let victim = tiles::eviction(&recency, &protected).ok_or_else(|| {
+                        LoadError::ResourceLimit("GPU residency exhausted".into())
+                    })?;
+                    cache.tiles.remove(&victim);
+                }
+                let level = &self.pixels.levels[key.level];
+                let tile = tiles::tile(level.size, *key, self.core);
+                let data = tiles::gutter(level, tile)?;
+                let texture = checked(&state.device, || {
+                    let texture = state.device.create_texture(&wgpu::TextureDescriptor {
+                        label: Some("linear-premultiplied sRGB tile with gutter"),
+                        size: wgpu::Extent3d {
+                            width: (tile.size[0] + 2) as u32,
+                            height: (tile.size[1] + 2) as u32,
+                            depth_or_array_layers: 1,
+                        },
+                        mip_level_count: 1,
+                        sample_count: 1,
+                        dimension: wgpu::TextureDimension::D2,
+                        format: if level.half {
+                            wgpu::TextureFormat::Rgba16Float
+                        } else {
+                            wgpu::TextureFormat::Rgba8UnormSrgb
+                        },
+                        usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+                        view_formats: &[],
+                    });
+                    state.queue.write_texture(
+                        texture.as_image_copy(),
+                        &data,
+                        wgpu::TexelCopyBufferLayout {
+                            offset: 0,
+                            bytes_per_row: Some(
+                                (tile.size[0] + 2) as u32 * level.bytes_per_pixel() as u32,
+                            ),
+                            rows_per_image: Some((tile.size[1] + 2) as u32),
+                        },
+                        texture.size(),
+                    );
+                    Ok(texture.create_view(&Default::default()))
+                })?;
+                cache.tiles.insert(
+                    *key,
+                    Resident {
+                        texture,
+                        bytes: needed,
+                        age,
+                        done: Arc::clone(&done),
                     },
-                    mip_level_count: 1,
-                    sample_count: 1,
-                    dimension: wgpu::TextureDimension::D2,
-                    format: if level.half {
-                        wgpu::TextureFormat::Rgba16Float
-                    } else {
-                        wgpu::TextureFormat::Rgba8UnormSrgb
-                    },
-                    usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
-                    view_formats: &[],
-                });
-                state.queue.write_texture(
-                    texture.as_image_copy(),
-                    &data,
-                    wgpu::TexelCopyBufferLayout {
-                        offset: 0,
-                        bytes_per_row: Some(
-                            (tile.size[0] + 2) as u32 * level.bytes_per_pixel() as u32,
-                        ),
-                        rows_per_image: Some((tile.size[1] + 2) as u32),
-                    },
-                    texture.size(),
                 );
-                state.queue.submit([]);
-                let completed = Arc::clone(&done);
-                state.queue.on_submitted_work_done(move || {
-                    completed.store(true, Ordering::Release);
-                });
-                Ok(texture.create_view(&Default::default()))
-            });
-            uploads.submitted(frame, Arc::clone(&done));
-            let texture = texture?;
-            cache.tiles.insert(
-                *key,
-                Resident {
-                    texture,
-                    bytes: needed,
-                    age,
-                    done,
-                },
-            );
+            }
+            Ok(())
+        })();
+        if batch.bytes > 0 {
+            uploads.finish_batch(staged, || {
+                checked(&state.device, || {
+                    state.queue.submit([]);
+                    state.queue.on_submitted_work_done(move || {
+                        done.store(true, Ordering::Release);
+                    });
+                    Ok(())
+                })
+            })?;
+        } else {
+            staged?;
         }
         uploads.coverage(frame, visible, |key| {
             cache
@@ -617,6 +664,136 @@ impl egui_wgpu::CallbackTrait for Paint {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn batches_pack_u8_and_high_depth_tiles_by_bytes() {
+        let limit = tiles::STAGING_BYTES / 2;
+        let full = tiles::Tile {
+            origin: [0, 0],
+            size: [1022, 1022],
+        };
+        let mut u8_batch = UploadBatch::default();
+        assert!(u8_batch.push(full.bytes_at_depth(4)).unwrap());
+        assert!(u8_batch.push(full.bytes_at_depth(4)).unwrap());
+        assert_eq!(u8_batch.bytes, limit);
+        assert!(!u8_batch.push(1).unwrap());
+        let mut high_depth = UploadBatch::default();
+        assert!(high_depth.push(full.bytes_at_depth(8)).unwrap());
+        assert_eq!(high_depth.bytes, limit);
+        assert!(!high_depth.push(1).unwrap());
+        assert!(UploadBatch::default().push(limit + 1).is_err());
+        // Mixed edge sizes use remaining bytes, not a fixed tile count.
+        let mut edges = UploadBatch::default();
+        for bytes in [limit - 100, 40, 59, 1] {
+            assert!(edges.push(bytes).unwrap());
+        }
+        assert_eq!(edges.bytes, limit);
+        assert!(!edges.push(1).unwrap());
+        assert_eq!(edges.bytes, limit);
+        assert!(edges.bytes + full.bytes_at_depth(8) <= tiles::STAGING_BYTES);
+    }
+
+    #[test]
+    fn batch_slot_survives_cancelled_selection_and_is_shared_across_windows() {
+        let viewer = Uploads::new(None);
+        let cancelled_selection = Arc::clone(&viewer);
+        let other_window = Arc::clone(&viewer);
+        let done = Arc::new(AtomicBool::new(false));
+        cancelled_selection
+            .lock()
+            .unwrap()
+            .submitted(10, Arc::clone(&done));
+        drop(cancelled_selection);
+        for frame in [10, 11, 99] {
+            assert!(!other_window.lock().unwrap().available(frame));
+        }
+        done.store(true, Ordering::Release);
+        assert!(!other_window.lock().unwrap().available(10));
+        assert!(other_window.lock().unwrap().available(11));
+    }
+
+    #[test]
+    fn local_batch_errors_drain_and_recover_only_after_shared_completion() {
+        // Reservation precedes even the first gutter allocation. Exercise that
+        // failure as well as allocation/create/write errors after partial writes.
+        for prior_writes in [0, 2] {
+            for allocation_failure in [true, false] {
+                let viewer = Uploads::new(None);
+                let selection = Arc::clone(&viewer);
+                let other_window = Arc::clone(&viewer);
+                let done = Arc::new(AtomicBool::new(false));
+                let mut residents = Vec::new();
+                let error = if allocation_failure {
+                    LoadError::ResourceLimit("Rendering allocation failed".into())
+                } else {
+                    LoadError::DisplayUnavailable("tile create/write failed".into())
+                };
+                let expected = error.to_string();
+                {
+                    let mut uploads = selection.lock().unwrap();
+                    uploads.submitted(1, Arc::clone(&done));
+                    for _ in 0..prior_writes {
+                        residents.push(Arc::clone(&done));
+                    }
+                    let mut submitted = false;
+                    let result = uploads.finish_batch(Err(error), || {
+                        submitted = true;
+                        Ok(())
+                    });
+                    assert!(submitted);
+                    assert_eq!(result.unwrap_err().to_string(), expected);
+                    assert!(uploads.check_failure().is_ok());
+                }
+                drop(selection);
+                for frame in [1, 2, 99] {
+                    assert!(!other_window.lock().unwrap().available(frame));
+                }
+                assert!(residents.iter().all(|tile| !tile.load(Ordering::Acquire)));
+                done.store(true, Ordering::Release);
+                assert!(residents.iter().all(|tile| tile.load(Ordering::Acquire)));
+                let uploads = other_window.lock().unwrap();
+                assert!(!uploads.available(1));
+                assert!(uploads.coverage(1, &[], |_| true).unwrap().is_none());
+                assert!(uploads.available(2));
+                assert!(uploads.coverage(2, &[], |_| true).is_ok());
+            }
+        }
+    }
+
+    #[test]
+    fn batch_submit_errors_are_latched_even_after_completion() {
+        for failed_stage in [true, false] {
+            let mut uploads = Uploads::default();
+            let done = Arc::new(AtomicBool::new(false));
+            uploads.submitted(1, Arc::clone(&done));
+            let staged = if failed_stage {
+                Err(LoadError::DisplayUnavailable(
+                    "second tile write failed".into(),
+                ))
+            } else {
+                Ok(())
+            };
+            let mut submitted = false;
+            let result = uploads.finish_batch(staged, || {
+                submitted = true;
+                Err(LoadError::DisplayUnavailable("batch submit failed".into()))
+            });
+            assert!(submitted); // even failed partial writes must be drained
+            assert!(result.is_err());
+            assert_eq!(
+                uploads.failure.lock().unwrap().as_deref(),
+                Some(
+                    LoadError::DisplayUnavailable("batch submit failed".into())
+                        .to_string()
+                        .as_str()
+                )
+            );
+            assert!(!uploads.available(2));
+            done.store(true, Ordering::Release);
+            assert!(!uploads.available(2));
+            assert!(uploads.coverage(2, &[], |_| true).is_err());
+        }
+    }
+
     #[test]
     fn backdrop_uniform_preserves_black_and_linearizes_white_and_grey() {
         assert_eq!(

@@ -2972,39 +2972,55 @@ mod tests {
     }
 
     #[test]
-    fn many_tile_uploads_are_bounded_per_frame_and_across_selections() {
+    fn many_tile_batches_are_byte_bounded_and_wait_for_complete_coverage() {
         use std::sync::atomic::{AtomicBool, Ordering};
         let keys = crate::tiles::coverage([5000, 3000], 0, 1022, [0.0, 0.0, 1.0, 1.0]);
         let mut uploads = crate::render::Uploads::default();
         let mut completed = Vec::new();
-        for (i, key) in keys.iter().enumerate() {
-            let frame = i as u64 + 1;
+        let mut frame = 0;
+        while completed.len() < keys.len() {
+            frame += 1;
             assert!(uploads.available(frame));
             let done = Arc::new(AtomicBool::new(false));
+            let mut batch = crate::render::UploadBatch::default();
+            let mut written = Vec::new();
+            for key in &keys[completed.len()..] {
+                let bytes = crate::tiles::tile([5000, 3000], *key, 1022).bytes_at_depth(4);
+                if !batch.push(bytes).unwrap() {
+                    break;
+                }
+                written.push(*key);
+                assert!(batch.bytes + bytes <= crate::tiles::STAGING_BYTES);
+            }
+            assert!(!written.is_empty());
             uploads.submitted(frame, Arc::clone(&done));
             assert!(!uploads.available(frame));
             assert!(!uploads.available(frame + 1)); // also blocks another selection
-            completed.push(*key);
+            for pass in [frame, frame + 1] {
+                assert!(
+                    uploads
+                        .coverage(pass, &keys, |k| completed.contains(k))
+                        .unwrap()
+                        .is_none()
+                );
+            }
+            done.store(true, Ordering::Release);
+            completed.extend(written);
+            assert!(!uploads.available(frame)); // no second batch even if GPU was fast
             assert!(
                 uploads
                     .coverage(frame, &keys, |k| completed.contains(k))
                     .unwrap()
                     .is_none()
             );
-            done.store(true, Ordering::Release);
-            assert!(!uploads.available(frame)); // no second tile even if GPU was fast
-            assert!(
-                2 * crate::tiles::tile([5000, 3000], *key, 1022).bytes_at_depth(4)
-                    <= crate::tiles::STAGING_BYTES
-            );
         }
         let mut display = Display::new(Status::Loading);
         let mut view = View::default();
         let coverage = uploads
-            .coverage(keys.len() as u64 + 1, &keys, |k| completed.contains(k))
+            .coverage(frame + 1, &keys, |k| completed.contains(k))
             .unwrap();
         assert!(display.finish_tiles(0, "complete", coverage, None, &mut view));
-        assert!(keys.len() > 1);
+        assert!((frame as usize) < keys.len());
     }
 
     #[test]

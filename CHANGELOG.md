@@ -8,6 +8,9 @@ and versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- Upload multiple visible image tiles per byte-bounded batch rather than one per
+  UI pass, preserving pixel quality, the staging budget and complete-frame admission.
+
 - Decode animated WebP with bundled libwebp, retaining the existing decoder for
   canvases above 8,294,400 pixels or total encoded durations above 2,147,483,647 ms.
   Static WebP and other formats keep their existing decoders.

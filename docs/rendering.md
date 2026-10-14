@@ -63,9 +63,19 @@ level are uploaded. GPU textures have a **128 MiB per-renderer LRU budget**;
 offscreen tiles are evicted first, and the complete current visible set is protected.
 A viewport whose mandatory visible set exceeds that budget reports a named resource
 error rather than displaying partial detail. CPU gutter buffers and queued uploads
-are bounded to **16 MiB**: each at-most-8-MiB high-depth upload (4 MiB for U8)
-is submitted and drained before
-the next. Creation/upload validation,
+are bounded to **16 MiB of payload**: multiple tiles are written into one batch
+of at most **8 MiB** (including gutters), alongside one transient CPU gutter of
+at most **8 MiB**. A maximum-size high-depth tile fills a batch; U8 and edge tiles
+can share it. Only one batch may be in flight across all windows and selections,
+including cancelled loads, and no second batch starts in the same UI pass.
+The batch is submitted once and drained before the next batch. Coverage is
+withheld until a later pass observes completion of every required tile. Partial
+batch errors still submit queued writes and retain the shared staging slot until
+completion, even if the originating selection is cancelled. After a successful
+drain, a local allocation/create/write error is returned without preventing later
+staging. Failed or uncertain submission, device loss and polling failures latch a
+viewer-wide display failure; completion cannot clear that failure.
+Creation/upload validation,
 internal and allocation errors become `Display unavailable` errors. A failed load
 or staging operation retains the prior image and navigation. Replacement admission
 requires a complete-visible-coverage witness, never the first successful tile.
