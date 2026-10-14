@@ -8,6 +8,9 @@ and versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- Request the next due animation frame in the same UI pass after full-frame admission
+  and playback controls, without an extra UI-turn delay or additional frame buffering.
+
 - Reduce CPU work when preparing 8-bit rendering levels, retaining identical pixels,
   alpha and the complete level chain.
 

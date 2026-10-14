@@ -209,6 +209,14 @@ successor while the UI can upload the current candidate. This shared GIF/APNG/We
 path uses the same worker and lookahead slot, not another queue or decoder thread.
 A preparation failure is terminal and remains available even if the current
 candidate has already been taken; an untaken candidate is replaced by that error.
+After complete GPU coverage replaces the displayed frame and old paint ownership,
+any already-due next request is issued in the same UI pass, after playback and
+navigation controls. Future deadlines still schedule a repaint; a pending candidate,
+paused/Off playback or an outstanding request does not start another automatic advance.
+The request uses the existing worker slot, even while successor preparation is busy.
+If egui reruns layout within the same frame, it retains the discarded pass's paint
+until the next pass ends. Due requests in these later passes wait for the next
+repaint so that retained paint cannot extend the frame-buffer bound.
 
 The pull-driven pipeline retains the displayed frame plus at most two normalized
 lookahead/candidate frames, never a growing list across loops. Within the 512 MiB

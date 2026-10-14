@@ -485,6 +485,32 @@ impl Worker {
             .take()
     }
 }
+#[cfg(test)]
+impl Worker {
+    // Exercise UI request ordering without a decoder thread or wall-clock waits.
+    pub(crate) fn idle_for_test(context: eframe::egui::Context) -> Self {
+        Self {
+            shared: Arc::new(Shared {
+                state: Mutex::new(State {
+                    advance: None,
+                    serial: 0,
+                    result: None,
+                    closed: false,
+                    lookahead: None,
+                }),
+                wake: Condvar::new(),
+                context,
+                before_prepare: Mutex::new(None),
+            }),
+        }
+    }
+
+    pub(crate) fn request_for_test(&self) -> (u64, Option<Option<usize>>) {
+        let state = self.shared.state.lock().expect("animation lock");
+        (state.serial, state.advance.map(|(_, target)| target))
+    }
+}
+
 impl Drop for Worker {
     fn drop(&mut self) {
         let mut state = self.shared.state.lock().expect("animation lock");

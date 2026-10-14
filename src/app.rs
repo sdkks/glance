@@ -741,7 +741,36 @@ impl Viewer {
                 }
             }
         }
-        if !playback.waiting && playback.clock.due(now) {
+        self.request_animation(ctx, now);
+    }
+
+    // Request only; never consume another result in the admission pass. The UI
+    // calls this again after replacing old paint ownership and applying commands.
+    fn request_animation(&mut self, ctx: &egui::Context, now: std::time::Duration) {
+        if self.pending_animation
+            || self.pending_image.is_some()
+            || !matches!(self.display.status, Status::Ready)
+            || self.display.path != self.selected
+        {
+            return;
+        }
+        let Some(playback) = &mut self.animation else {
+            return;
+        };
+        if playback.waiting
+            || playback.manual
+            || playback.clock.paused
+            || playback.clock.rate == crate::animation::Rate::Off
+        {
+            return;
+        }
+        if playback.clock.due(now) {
+            // egui retains the previous discarded pass's output until this pass
+            // ends. It may still own the retired frame, even after last_paint swaps.
+            if ctx.current_pass_index() > 0 {
+                ctx.request_repaint();
+                return;
+            }
             playback.waiting = true;
             playback
                 .worker
@@ -750,6 +779,15 @@ impl Viewer {
         }
         if !playback.waiting {
             ctx.request_repaint_after(playback.clock.deadline.saturating_sub(now));
+        }
+    }
+
+    fn finish_animation_pass(&mut self, ctx: &egui::Context, action: &crate::windows::Action) {
+        if !action.close
+            && !action.quit
+            && let Some(playback) = &self.animation
+        {
+            self.request_animation(ctx, playback.origin.elapsed());
         }
     }
 
@@ -1627,10 +1665,7 @@ impl Viewer {
                 self.about_open = true;
                 ctx.request_repaint();
             }
-            Some(Command::Depth(depth)) => {
-                if self.settings.preload_depth == depth {
-                    return action;
-                }
+            Some(Command::Depth(depth)) if self.settings.preload_depth != depth => {
                 self.settings.preload_depth = depth;
                 shared.settings = self.settings;
                 shared.store.save(shared.settings);
@@ -1660,10 +1695,9 @@ impl Viewer {
                 shared.store.save(shared.settings);
             }
             Some(Command::Playback) => {
-                if let Some(playback) = &mut self.animation {
-                    if playback.clock.rate == crate::animation::Rate::Off {
-                        return action;
-                    }
+                if let Some(playback) = &mut self.animation
+                    && playback.clock.rate != crate::animation::Rate::Off
+                {
                     playback.clock.toggle(playback.origin.elapsed());
                     ctx.request_repaint();
                     // Pause holds an uncommitted candidate without changing the displayed frame.
@@ -1698,10 +1732,16 @@ impl Viewer {
             }
             _ => {}
         }
+        // The canvas scope has released its local image clones; last_paint now
+        // refers to the admitted frame, and controls may have paused/cancelled it.
+        self.finish_animation_pass(&ctx, &action);
         self.update_title(&ctx);
         action
     }
 }
+
+#[cfg(test)]
+mod request_tests;
 
 #[cfg(test)]
 mod tests {
