@@ -1,4 +1,19 @@
 use crate::decode::LoadError;
+use std::sync::LazyLock;
+
+// Invariant exact-formula tables, shared by all workers/windows (65 KiB payload).
+static LINEAR: LazyLock<[f32; 256]> = LazyLock::new(|| std::array::from_fn(|v| linear(v as u8)));
+static PREMULTIPLIED: LazyLock<[[u8; 256]; 256]> = LazyLock::new(|| {
+    let lut = &*LINEAR;
+    std::array::from_fn(|alpha| std::array::from_fn(|v| encoded(lut[v] * alpha as f32 / 255.0)))
+});
+
+#[cfg(test)]
+mod comparison;
+// Frozen pre-optimization implementation; no production helpers shared by the oracle.
+#[cfg(test)]
+#[allow(dead_code)]
+mod reference;
 
 // Rendering payload: sRGB-encoded *linear-premultiplied* RGB, linear alpha.
 // The sRGB texture decodes RGB before filtering; the shader must not premultiply again.
@@ -68,10 +83,8 @@ pub fn generate(size: [usize; 2], straight: &[u8]) -> Result<Vec<Level>, LoadErr
         ));
     }
     let mut rgba = allocation(straight.len())?;
-    let lut: [f32; 256] = std::array::from_fn(|v| linear(v as u8));
-    let premultiplied: Vec<[u8; 256]> = (0..=255)
-        .map(|alpha| std::array::from_fn(|v| encoded(lut[v] * alpha as f32 / 255.0)))
-        .collect();
+    let lut = &*LINEAR;
+    let premultiplied = &*PREMULTIPLIED;
     for (src, dst) in straight.chunks_exact(4).zip(rgba.chunks_exact_mut(4)) {
         for c in 0..3 {
             dst[c] = premultiplied[src[3] as usize][src[c] as usize];
@@ -84,12 +97,31 @@ pub fn generate(size: [usize; 2], straight: &[u8]) -> Result<Vec<Level>, LoadErr
         half: false,
     }];
     while levels.last().unwrap().size != [1, 1] {
-        levels.push(reduce(levels.last().unwrap(), &lut)?);
+        levels.push(reduce(levels.last().unwrap(), lut)?);
     }
     Ok(levels)
 }
 
 fn reduce(input: &Level, lut: &[f32; 256]) -> Result<Level, LoadError> {
+    let [w, h] = input.size;
+    if w.is_multiple_of(2) && h.is_multiple_of(2) {
+        let size = [w / 2, h / 2];
+        let mut rgba = allocation(size[0] * size[1] * 4)?;
+        reduce_even(input, lut, &mut rgba);
+        Ok(Level {
+            size,
+            rgba,
+            half: false,
+        })
+    } else {
+        reduce_generic(input, lut)
+    }
+}
+
+// On measured release builds, keeping this boundary out of line avoids an
+// odd-image slowdown. The generic partitioning and arithmetic stay unchanged.
+#[inline(never)]
+fn reduce_generic(input: &Level, lut: &[f32; 256]) -> Result<Level, LoadError> {
     let [w, h] = input.size;
     let size = [(w / 2).max(1), (h / 2).max(1)];
     let mut rgba = allocation(size[0] * size[1] * 4)?;
@@ -121,6 +153,39 @@ fn reduce(input: &Level, lut: &[f32; 256]) -> Result<Level, LoadError> {
         rgba,
         half: false,
     })
+}
+
+// Even two-dimensional parents have exact 2×2 boxes. Keep the generic path's
+// top-left, top-right, bottom-left, bottom-right additions and alpha divisions.
+fn reduce_even(input: &Level, lut: &[f32; 256], rgba: &mut [u8]) {
+    let row_bytes = input.size[0] * 4;
+    for (rows, output) in input
+        .rgba
+        .chunks_exact(row_bytes * 2)
+        .zip(rgba.chunks_exact_mut(row_bytes / 2))
+    {
+        let (top, bottom) = rows.split_at(row_bytes);
+        for ((a, b), dst) in top
+            .chunks_exact(8)
+            .zip(bottom.chunks_exact(8))
+            .zip(output.chunks_exact_mut(4))
+        {
+            for c in 0..3 {
+                let mut sum = 0.0;
+                sum += lut[a[c] as usize];
+                sum += lut[a[c + 4] as usize];
+                sum += lut[b[c] as usize];
+                sum += lut[b[c + 4] as usize];
+                dst[c] = encoded(sum / 4.0);
+            }
+            let mut alpha = 0.0;
+            alpha += f32::from(a[3]) / 255.0;
+            alpha += f32::from(a[7]) / 255.0;
+            alpha += f32::from(b[3]) / 255.0;
+            alpha += f32::from(b[7]) / 255.0;
+            dst[3] = (alpha / 4.0 * 255.0).round() as u8;
+        }
+    }
 }
 
 // U16 source stays straight, encoded sRGB. RGBA16F tiles and levels store

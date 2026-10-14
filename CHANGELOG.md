@@ -8,6 +8,9 @@ and versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- Reduce CPU work when preparing 8-bit rendering levels, retaining identical pixels,
+  alpha and the complete level chain.
+
 - Prepare the next GIF/APNG/WebP frame's rendering levels while the current frame
   uploads, using the existing single lookahead slot and unchanged memory limits.
 

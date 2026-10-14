@@ -39,6 +39,33 @@ zoom without discarding native detail; no second pyramid or speculative variants
 are retained. Their total payload is bounded by twice the straight source bytes
 (including the premultiplied base; normally about 4/3 for two-dimensional images).
 
+U8 generation shares two exact-formula lookup tables across workers and windows:
+256 linear `f32` values and 65,536 premultiplied encoded bytes (65 KiB of fixed
+process-lifetime payload, plus synchronization metadata). They initialize once on
+first U8 generation; initialization is not free and concurrent first callers may
+wait. Even-width/even-height parents use a 2×2 loop with the same floating-point
+addition order and alpha arithmetic as the general box loop. Odd/thin parents
+retain the general partitioning algorithm; U16 generation is unchanged. There
+are no additional threads, approximated transfer functions, or omitted levels.
+
+For a display-free, opt-in release comparison against the frozen original
+implementation, run only the ignored benchmark in a fresh process:
+
+```sh
+GLANCE_LEVELS_BENCH_IMAGE=/path/to/local-u8-image.webp cargo test --release --locked levels::comparison::benchmark_levels -- --ignored --exact --nocapture --test-threads=1
+```
+
+The optional image is decoded locally once, outside timing; only its first frame
+is tested, and image bytes are never printed. Without the variable, only generated
+fixtures run. Each fixture checks full-chain byte identity, warms both paths, then
+alternates original/candidate order for 24 samples each. Reported milliseconds
+are single-thread **elapsed CPU-stage time**, including allocation and destruction,
+not process/thread CPU counters, decode/GPU time, or delivered animation FPS.
+Table first-touch time is reported separately as one sample before decoding;
+all throughput samples use warm tables. The bounded generated cases cover opaque,
+alpha, odd, thin and 3840×2160 static inputs. Run-to-run/platform variation still
+requires interpretation; timings are not a CI performance threshold.
+
 **Premultiplication convention:** rendering RGB is premultiplied **in linear light**,
 then sRGB-encoded into RGBA8; alpha is linear. Hardware sRGB texture sampling
 linearizes RGB before filtering. Generation decodes the same convention before
