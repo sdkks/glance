@@ -8,6 +8,10 @@ and versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- Prepare large even 8-bit rendering levels with up to three shared-budget helper
+  threads, retaining exact pixels and existing image buffers; small inputs and
+  busy or unavailable helper capacity use the serial path.
+
 - Request the next due animation frame in the same UI pass after full-frame admission
   and playback controls, without an extra UI-turn delay or additional frame buffering.
 

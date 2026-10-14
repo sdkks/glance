@@ -46,10 +46,32 @@ first U8 generation; initialization is not free and concurrent first callers may
 wait. Even-width/even-height parents use a 2×2 loop with the same floating-point
 addition order and alpha arithmetic as the general box loop. Odd/thin parents
 retain the general partitioning algorithm; U16 generation is unchanged. There
-are no additional threads, approximated transfer functions, or omitted levels.
+are no approximated transfer functions or omitted levels.
 
-For a display-free, opt-in release comparison against the frozen original
-implementation, run only the ignored benchmark in a fresh process:
+Even U8 reductions producing at least 65,536 pixels can split disjoint output
+rows between the existing caller and at most three temporary scoped helpers.
+The helper allowance is `min(3, available_parallelism - 2)`, saturating at zero:
+counting the caller leaves at least one reported CPU for other work on hosts with
+three or more CPUs. This is a scheduling allowance, not CPU affinity or a UI
+latency guarantee. Available parallelism is queried once, lazily; an unavailable
+count or at most two reported CPUs keeps the serial path. One nonblocking permit
+covers all windows/workers process-wide. A competing reduction never waits for
+that permit; it runs serially. Small levels remain serial, including the tail of
+a large pyramid. Base premultiplication remains serial.
+
+Helpers borrow the existing input and disjoint regions of the existing output;
+there are no extra image buffers or persistent pool. The permit is held until
+all helpers are explicitly joined, including thread-local destruction and unwind.
+If thread creation fails, any previously started helpers join before the serial
+kernel overwrites the same output.
+Helper panics propagate through the existing load/animation panic containment.
+Temporary thread stacks (standard-library/platform defaults), thread metadata
+and creation/join overhead are additional to image payload accounting; the
+per-image buffer limits are unchanged. First-use table/parallelism initialization
+can briefly synchronize callers independently of the nonblocking helper permit.
+
+For a display-free, opt-in release comparison against the current optimized
+serial algorithm, run only the ignored benchmark in a fresh process:
 
 ```sh
 GLANCE_LEVELS_BENCH_IMAGE=/path/to/local-u8-image.webp cargo test --release --locked levels::comparison::benchmark_levels -- --ignored --exact --nocapture --test-threads=1
@@ -57,14 +79,22 @@ GLANCE_LEVELS_BENCH_IMAGE=/path/to/local-u8-image.webp cargo test --release --lo
 
 The optional image is decoded locally once, outside timing; only its first frame
 is tested, and image bytes are never printed. Without the variable, only generated
-fixtures run. Each fixture checks full-chain byte identity, warms both paths, then
-alternates original/candidate order for 24 samples each. Reported milliseconds
-are single-thread **elapsed CPU-stage time**, including allocation and destruction,
-not process/thread CPU counters, decode/GPU time, or delivered animation FPS.
-Table first-touch time is reported separately as one sample before decoding;
-all throughput samples use warm tables. The bounded generated cases cover opaque,
-alpha, odd, thin and 3840×2160 static inputs. Run-to-run/platform variation still
-requires interpretation; timings are not a CI performance threshold.
+fixtures run. Each fixture checks full-chain byte identity against the independent
+frozen original oracle, warms both timing paths, then alternates serial/candidate
+order for 24 samples each. The timing control disables helpers in the same current
+kernel (including the exact lookup tables and even-row optimization); it is not
+the older oracle used to establish pixel parity, nor a separate historical binary.
+Reported milliseconds are **elapsed CPU-stage wall time**, including scoped
+helper creation/join, allocation and destruction, not process/thread CPU counters,
+decode/GPU time, or delivered animation FPS. Table first-touch time is reported
+separately as one sample before decoding; all throughput samples use warm tables.
+The first timed per-fixture pair is also reported, but follows parity generation
+and is not a cold-cache or first-ever-thread measurement. The bounded generated
+cases cover small/below-threshold/threshold inputs, opaque, alpha, odd, thin and
+3840×2160 static inputs. Local macOS ARM64 measurements show lower large-even-U8
+preparation times; odd/thin paths are not a claimed speedup. Run-to-run/platform
+variation, contention and end-to-end UI/GPU costs still require interpretation;
+timings are not a CI performance threshold or a universal FPS promise.
 
 **Premultiplication convention:** rendering RGB is premultiplied **in linear light**,
 then sRGB-encoded into RGBA8; alpha is linear. Hardware sRGB texture sampling

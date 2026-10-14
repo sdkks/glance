@@ -1,5 +1,5 @@
 //! Differential checks and opt-in, display-free CPU-stage timings.
-use super::{Level, generate, generate16, reference};
+use super::{Level, generate, generate_u8, generate16, reference};
 use std::{hint::black_box, time::Instant};
 
 fn assert_levels(actual: &[Level], expected: &[reference::Level]) {
@@ -83,6 +83,18 @@ fn full_chains_match_original_for_even_odd_thin_and_alpha_patterns() {
 }
 
 #[test]
+fn large_full_chains_match_independent_oracle_and_current_serial() {
+    for size in [[1024, 1024], [1026, 1030], [1920, 1080]] {
+        for pattern in [0, 3] {
+            let input = source(size, pattern);
+            let expected = reference::generate(size, &input).unwrap();
+            assert_levels(&generate(size, &input).unwrap(), &expected);
+            assert_levels(&generate_u8::<false>(size, &input).unwrap(), &expected);
+        }
+    }
+}
+
+#[test]
 fn exhaustive_u8_tables_and_u16_input_domain_match_original() {
     for v in 0..=255 {
         assert_eq!(
@@ -158,14 +170,19 @@ fn benchmark(name: &str, size: [usize; 2], input: &[u8]) {
         &generate(size, input).unwrap(),
         &reference::generate(size, input).unwrap(),
     );
+    let first_serial = timed(|| generate_u8::<false>(size, black_box(input)).unwrap());
+    let first_parallel = timed(|| generate(size, black_box(input)).unwrap());
+    println!(
+        "{name}: first timed serial={first_serial:.3} parallel={first_parallel:.3} ms (tables warm, not cold OS caches)"
+    );
     for _ in 0..2 {
         black_box(generate(size, black_box(input)).unwrap());
-        black_box(reference::generate(size, black_box(input)).unwrap());
+        black_box(generate_u8::<false>(size, black_box(input)).unwrap());
     }
     let mut original = Vec::new();
     let mut candidate = Vec::new();
     for i in 0..24 {
-        let a = || reference::generate(black_box(size), black_box(input)).unwrap();
+        let a = || generate_u8::<false>(black_box(size), black_box(input)).unwrap();
         let b = || generate(black_box(size), black_box(input)).unwrap();
         if i % 2 == 0 {
             original.push(timed(a));
@@ -179,7 +196,7 @@ fn benchmark(name: &str, size: [usize; 2], input: &[u8]) {
         "{name}: {}x{} U8 RGBA; complete level chain; allocation and drop included",
         size[0], size[1]
     );
-    let a = stats("original", &mut original);
+    let a = stats("current optimized serial control", &mut original);
     let b = stats("candidate", &mut candidate);
     println!(
         "mean elapsed reduction={:.2}% ratio={:.3}x",
@@ -202,7 +219,12 @@ fn benchmark_levels() {
     });
     println!("first-touch U8 tables: {init:.3} ms (one sample; 66560 bytes static payload)");
     println!(
-        "single-thread elapsed CPU-stage timings, not process/thread CPU counters; no decode or GPU in timed regions"
+        "elapsed CPU-stage wall timings (not CPU counters or FPS); scoped helper creation/join, allocation/drop included; no timed decode/GPU"
+    );
+    println!(
+        "available parallelism={:?}; helper cap=3, reserve one reported CPU, output threshold={} pixels",
+        std::thread::available_parallelism(),
+        super::parallel::MIN_OUTPUT_PIXELS
     );
     if let Some(path) = std::env::var_os("GLANCE_LEVELS_BENCH_IMAGE") {
         // Real normalization path; decode is outside timing and may use the LUTs.
@@ -218,6 +240,10 @@ fn benchmark_levels() {
         );
     }
     for (name, size, pattern) in [
+        ("generated small opaque", [256, 256], 0),
+        ("generated below-threshold opaque", [510, 510], 0),
+        ("generated threshold opaque", [512, 512], 0),
+        ("generated square opaque", [1024, 1024], 0),
         ("generated opaque", [1920, 1080], 0),
         ("generated alpha ramp", [1920, 1080], 2),
         ("generated odd mixed alpha", [1919, 1079], 3),

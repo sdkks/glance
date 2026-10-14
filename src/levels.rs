@@ -1,6 +1,8 @@
 use crate::decode::LoadError;
 use std::sync::LazyLock;
 
+mod parallel;
+
 // Invariant exact-formula tables, shared by all workers/windows (65 KiB payload).
 static LINEAR: LazyLock<[f32; 256]> = LazyLock::new(|| std::array::from_fn(|v| linear(v as u8)));
 static PREMULTIPLIED: LazyLock<[[u8; 256]; 256]> = LazyLock::new(|| {
@@ -73,6 +75,15 @@ pub fn allocation(bytes: usize) -> Result<Vec<u8>, LoadError> {
 }
 
 pub fn generate(size: [usize; 2], straight: &[u8]) -> Result<Vec<Level>, LoadError> {
+    generate_u8::<true>(size, straight)
+}
+
+// The false specialization is a test-only timing control: the current optimized
+// serial algorithm, including shared tables and the exact same row kernel.
+fn generate_u8<const PARALLEL: bool>(
+    size: [usize; 2],
+    straight: &[u8],
+) -> Result<Vec<Level>, LoadError> {
     let bytes = size[0].checked_mul(size[1]).and_then(|n| n.checked_mul(4));
     if size.contains(&0)
         || bytes != Some(straight.len())
@@ -97,17 +108,19 @@ pub fn generate(size: [usize; 2], straight: &[u8]) -> Result<Vec<Level>, LoadErr
         half: false,
     }];
     while levels.last().unwrap().size != [1, 1] {
-        levels.push(reduce(levels.last().unwrap(), lut)?);
+        levels.push(reduce::<PARALLEL>(levels.last().unwrap(), lut)?);
     }
     Ok(levels)
 }
 
-fn reduce(input: &Level, lut: &[f32; 256]) -> Result<Level, LoadError> {
+fn reduce<const PARALLEL: bool>(input: &Level, lut: &[f32; 256]) -> Result<Level, LoadError> {
     let [w, h] = input.size;
     if w.is_multiple_of(2) && h.is_multiple_of(2) {
         let size = [w / 2, h / 2];
         let mut rgba = allocation(size[0] * size[1] * 4)?;
-        reduce_even(input, lut, &mut rgba);
+        if !PARALLEL || !parallel::reduce(input, lut, &mut rgba) {
+            reduce_even_rows(&input.rgba, w * 4, lut, &mut rgba);
+        }
         Ok(Level {
             size,
             rgba,
@@ -157,10 +170,8 @@ fn reduce_generic(input: &Level, lut: &[f32; 256]) -> Result<Level, LoadError> {
 
 // Even two-dimensional parents have exact 2×2 boxes. Keep the generic path's
 // top-left, top-right, bottom-left, bottom-right additions and alpha divisions.
-fn reduce_even(input: &Level, lut: &[f32; 256], rgba: &mut [u8]) {
-    let row_bytes = input.size[0] * 4;
+fn reduce_even_rows(input: &[u8], row_bytes: usize, lut: &[f32; 256], rgba: &mut [u8]) {
     for (rows, output) in input
-        .rgba
         .chunks_exact(row_bytes * 2)
         .zip(rgba.chunks_exact_mut(row_bytes / 2))
     {
