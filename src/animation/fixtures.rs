@@ -6,6 +6,7 @@ use crate::{
 use image::{ImageEncoder, Rgba, RgbaImage};
 use std::io::Cursor;
 
+mod overlap_tests;
 mod webp_tests;
 
 fn gif(repeat: Option<image::codecs::gif::Repeat>) -> Vec<u8> {

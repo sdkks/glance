@@ -186,6 +186,11 @@ enum Frames<'a> {
     WebP(webp::Native<'a>),
 }
 
+struct RawFrame {
+    rgba: image::RgbaImage,
+    timing: Duration,
+}
+
 pub struct Stream<'a> {
     frames: Frames<'a>,
     pub loops: LoopCount,
@@ -280,6 +285,13 @@ impl<'a> Stream<'a> {
     }
 
     pub fn next(&mut self) -> Result<Option<Pixels>, LoadError> {
+        self.decode_next()?
+            .map(|raw| self.normalize(raw))
+            .transpose()
+    }
+
+    // Composition remains sequential. EOF is known before preparing the pixels.
+    fn decode_next(&mut self) -> Result<Option<RawFrame>, LoadError> {
         let (rgba, timing) = match &mut self.frames {
             Frames::Image(frames) => {
                 let Some(frame) = frames.next() else {
@@ -296,6 +308,10 @@ impl<'a> Stream<'a> {
                 frame
             }
         };
+        Ok(Some(RawFrame { rgba, timing }))
+    }
+
+    fn normalize(&self, RawFrame { rgba, timing }: RawFrame) -> Result<Pixels, LoadError> {
         let mut image = image::DynamicImage::ImageRgba8(rgba);
         image.apply_orientation(self.orientation);
         let size = [image.width() as usize, image.height() as usize];
@@ -303,14 +319,14 @@ impl<'a> Stream<'a> {
         let warning = crate::color::normalize8(&mut rgba, self.icc.as_deref(), false)
             .or_else(|| self.warning.clone());
         let levels = crate::levels::generate(size, &rgba)?;
-        Ok(Some(Pixels {
+        Ok(Pixels {
             size,
             rgba,
             levels,
             warning,
             animation_delay: Some(timing),
             ..Default::default()
-        }))
+        })
     }
 }
 
@@ -384,10 +400,15 @@ struct State {
     #[cfg(test)]
     lookahead: Option<std::sync::Weak<Pixels>>,
 }
+#[cfg(test)]
+type BeforePrepare = Box<dyn FnOnce() -> Result<(), LoadError> + Send>;
+
 struct Shared {
     state: Mutex<State>,
     wake: Condvar,
     context: eframe::egui::Context,
+    #[cfg(test)]
+    before_prepare: Mutex<Option<BeforePrepare>>,
 }
 pub struct Worker {
     shared: Arc<Shared>,
@@ -409,6 +430,8 @@ impl Worker {
             }),
             wake: Condvar::new(),
             context,
+            #[cfg(test)]
+            before_prepare: Mutex::new(None),
         });
         let child = Arc::clone(&shared);
         std::thread::Builder::new()
@@ -554,9 +577,11 @@ fn run(shared: &Shared, version: &crate::folder::FileVersion) -> Result<(), Load
         let pixels = next
             .take()
             .ok_or_else(|| LoadError::Malformed("Empty animation".into()))?;
-        // Decode dependents strictly in order, retaining only one lookahead frame.
-        next = stream.next()?.map(Arc::new);
-        let final_frame = next.is_none() && !may_repeat(loops, completed.saturating_add(1));
+        // Decode just the composed successor before publication so EOF still
+        // marks the exact final frame. Its raw buffer occupies the existing
+        // lookahead slot; normalization must not retain a second successor.
+        let raw = stream.decode_next()?;
+        let final_frame = raw.is_none() && !may_repeat(loops, completed.saturating_add(1));
         if crate::folder::FileVersion::read(path)
             .ok()
             .is_none_or(|after| !version.same_content(&after))
@@ -565,25 +590,46 @@ fn run(shared: &Shared, version: &crate::folder::FileVersion) -> Result<(), Load
                 "File changed during animation; reopen it".into(),
             ));
         }
-        let mut state = shared.state.lock().expect("animation lock");
-        if state.closed {
-            return Ok(());
-        }
-        if state.serial != serial {
-            continue;
-        }
-        #[cfg(test)]
         {
-            state.lookahead = next.as_ref().map(Arc::downgrade);
+            let mut state = shared.state.lock().expect("animation lock");
+            if state.closed {
+                return Ok(());
+            }
+            #[cfg(test)]
+            {
+                state.lookahead = None;
+            }
+            if state.serial == serial {
+                state.result = Some(Ok(Some(Frame {
+                    pixels,
+                    final_frame,
+                    index,
+                })));
+                index = index.saturating_add(1);
+                shared.wake.notify_all();
+                shared.context.request_repaint();
+            } else {
+                drop(pixels);
+            }
+            // A cancelled candidate must be released before preparing lookahead.
         }
-        state.result = Some(Ok(Some(Frame {
-            pixels,
-            final_frame,
-            index,
-        })));
-        index = index.saturating_add(1);
-        shared.wake.notify_all();
-        shared.context.request_repaint();
+        // The UI can now take/stage the published frame while this same worker
+        // prepares its sole successor. No shared-state lock spans pixel work.
+        // Even after cancellation, finish this successor to keep the sequential
+        // decoder cursor valid for the next request (manual targets replay it).
+        if let Some(raw) = raw {
+            #[cfg(test)]
+            {
+                let hook = shared.before_prepare.lock().expect("prepare hook").take();
+                if let Some(hook) = hook {
+                    hook()?;
+                }
+            }
+            if shared.state.lock().expect("animation lock").closed {
+                return Ok(());
+            }
+            next = Some(Arc::new(stream.normalize(raw)?));
+        }
     }
 }
 

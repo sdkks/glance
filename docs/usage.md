@@ -162,8 +162,8 @@ Interactive latency and menu/input feel still need human desktop verification.
 
 ## Animation playback
 
-GIF, 8-bit APNG (`.png`), and animated WebP start playing when opened. The existing
-`image` decoder composes disposal, offsets and transparency; Glance does not collect
+GIF, 8-bit APNG (`.png`), and animated WebP start playing when opened. Their
+[decoders](formats.md) compose disposal, offsets and transparency; Glance does not collect
 an entire animation. GIF Netscape finite values count repetitions after the initial
 play; APNG/WebP finite values count total plays. Infinite instructions keep playing.
 A GIF without a loop instruction plays once and holds its final frame.
@@ -201,6 +201,14 @@ frames can be omitted from presentation, but their dependents are decoded in ord
 GPU coverage is admitted atomically; a decoding/upload error retains the prior frame.
 Manual stepping may replay composition from the beginning, so it can take longer
 in a very long animation. No seeking, speed multipliers, editing or slideshow is provided.
+
+The worker decodes/composes one raw successor (or observes EOF) before publishing
+its current candidate, preserving exact final-frame detection. After publication,
+it applies orientation, color normalization and rendering-level generation to that
+successor while the UI can upload the current candidate. This shared GIF/APNG/WebP
+path uses the same worker and lookahead slot, not another queue or decoder thread.
+A preparation failure is terminal and remains available even if the current
+candidate has already been taken; an untaken candidate is replaced by that error.
 
 The pull-driven pipeline retains the displayed frame plus at most two normalized
 lookahead/candidate frames, never a growing list across loops. Within the 512 MiB

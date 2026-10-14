@@ -8,6 +8,9 @@ and versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- Prepare the next GIF/APNG/WebP frame's rendering levels while the current frame
+  uploads, using the existing single lookahead slot and unchanged memory limits.
+
 - Upload multiple visible image tiles per byte-bounded batch rather than one per
   UI pass, preserving pixel quality, the staging budget and complete-frame admission.
 
