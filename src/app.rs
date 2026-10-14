@@ -261,7 +261,7 @@ impl Playback {
     fn set_rate(&mut self, encoded: std::time::Duration, rate: crate::animation::Rate) {
         self.clock.set_rate(self.origin.elapsed(), encoded, rate);
         // Invalidate work scheduled under the old policy; continue from the displayed
-        // position even if late-frame omission moved the decoder ahead of it.
+        // position even if a pending frame has not yet been admitted.
         self.worker.cancel();
         self.waiting = false;
         self.manual = false;
@@ -715,18 +715,13 @@ impl Viewer {
                             .animation_delay
                             .expect("animation frame timing"),
                     );
-                    let skip = if playback.manual {
+                    if playback.manual {
                         playback.clock.stepped(duration);
-                        false
                     } else {
-                        playback.clock.arrive(now, duration, frame.final_frame)
-                    };
+                        playback.clock.arrive(now, duration);
+                    }
                     playback.final_frame = frame.final_frame;
                     playback.candidate_index = frame.index;
-                    if skip {
-                        playback.worker.advance(None);
-                        return;
-                    }
                     match self.upload(frame.pixels) {
                         Ok(image) => {
                             self.pending_animation = true;

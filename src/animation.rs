@@ -261,7 +261,7 @@ impl Stream {
 }
 
 /// Clock values are elapsed monotonic durations, injected directly in tests.
-/// Deadlines advance from their old value, never from a late presentation time.
+/// Deadlines remain cumulative while on time, but never retain a backlog.
 pub struct Clock {
     pub paused: bool,
     pub deadline: Duration,
@@ -293,9 +293,11 @@ impl Clock {
     pub fn advance(&mut self, duration: Duration) {
         self.deadline = self.deadline.saturating_add(duration);
     }
-    pub fn arrive(&mut self, now: Duration, duration: Duration, final_frame: bool) -> bool {
+    /// Account for a ready frame without dropping it. Decoding has already spent
+    /// part (or all) of its interval: do not add another full interval on arrival.
+    pub fn arrive(&mut self, now: Duration, duration: Duration) {
         self.advance(duration);
-        !final_frame && self.due(now)
+        self.deadline = self.deadline.max(now);
     }
     pub fn due(&self, now: Duration) -> bool {
         self.rate != Rate::Off && !self.paused && now >= self.deadline
@@ -497,7 +499,7 @@ fn run(shared: &Shared, version: &crate::folder::FileVersion) -> Result<(), Load
         let pixels = next
             .take()
             .ok_or_else(|| LoadError::Malformed("Empty animation".into()))?;
-        // Decode dependents strictly in order, even when presentation skips them.
+        // Decode dependents strictly in order, retaining only one lookahead frame.
         next = stream.next()?.map(Arc::new);
         let final_frame = next.is_none() && !may_repeat(loops, completed.saturating_add(1));
         if crate::folder::FileVersion::read(path)
@@ -634,17 +636,50 @@ mod tests {
         assert!(may_repeat(LoopCount::Infinite, u32::MAX));
     }
     #[test]
-    fn late_frames_skip_but_final_frame_is_presented_without_drift() {
+    fn sustained_slow_delivery_rebases_without_an_extra_interval() {
         let ms = Duration::from_millis;
         let mut c = Clock::new(ms(0), ms(30));
-        assert!(c.arrive(ms(125), ms(30), false));
-        assert_eq!(c.deadline, ms(60));
-        assert!(c.arrive(ms(125), ms(30), false));
-        assert_eq!(c.deadline, ms(90));
-        assert!(!c.arrive(ms(125), ms(30), true));
-        assert_eq!(c.deadline, ms(120));
-        assert!(!c.arrive(ms(125), ms(30), false));
+        for arrival in [125, 220, 315, 410] {
+            c.arrive(ms(arrival), ms(30));
+            assert_eq!(c.deadline, ms(arrival));
+            assert!(c.due(ms(arrival))); // next decode can start after admission
+        }
+        // Once decoding recovers, resume normal timing rather than catching up
+        // through an unbounded backlog or adding a full interval after decoding.
+        c.arrive(ms(415), ms(30));
+        assert_eq!(c.deadline, ms(440));
+        assert!(!c.due(ms(439)));
+        assert!(c.due(ms(440)));
+    }
+
+    #[test]
+    fn timely_arrivals_keep_requested_cadence_with_variable_delays() {
+        let ms = Duration::from_millis;
+        let mut c = Clock::new(ms(0), ms(100));
+        c.arrive(ms(110), ms(50));
         assert_eq!(c.deadline, ms(150));
+        c.arrive(ms(155), ms(200));
+        assert_eq!(c.deadline, ms(350));
+        c.arrive(ms(350), ms(30));
+        assert_eq!(c.deadline, ms(380));
+    }
+
+    #[test]
+    fn pause_and_manual_step_after_lateness_preserve_resume_timing() {
+        let ms = Duration::from_millis;
+        let mut c = Clock::new(ms(0), ms(30));
+        c.arrive(ms(125), ms(30));
+        c.toggle(ms(125));
+        assert!(!c.due(ms(1000)));
+        c.toggle(ms(1000));
+        assert!(c.due(ms(1000)));
+        c.arrive(ms(1005), ms(30));
+        assert_eq!(c.deadline, ms(1030));
+        c.step();
+        c.stepped(ms(50));
+        assert!(!c.due(ms(2000)));
+        c.toggle(ms(2000));
+        assert_eq!(c.deadline, ms(2050));
     }
 
     #[test]

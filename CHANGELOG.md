@@ -6,6 +6,11 @@ and versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Fixed
+
+- Keep animations moving when frame preparation cannot match their requested rate,
+  instead of repeatedly discarding late frames and leaving a still image.
+
 ## [0.4.1] - 2026-10-13
 
 ### Fixed
