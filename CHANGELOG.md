@@ -6,6 +6,8 @@ and versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.4.2] - 2026-10-15
+
 ### Changed
 
 - Copy tile filtering gutters by contiguous row spans, retaining exact pixels and
