@@ -144,6 +144,10 @@ Use **Playback → Pause/Resume** or **Next Frame** to inspect them.
 **Settings → Animation rate** offers file timing, fixed frame rates,
 and **Off (first frame only)**. Space remains temporary pan, not playback.
 
+To create animated contact sheets from videos, use
+[ACSM](https://github.com/sdkks/animated-contact-sheet-maker). It generates
+WebP grids of looping clips that you can open and play in Glance.
+
 Pixels with transparency composite against a backdrop: `b` cycles it for the
 current image (white → grey → black), and **Settings → Background color** sets
 the saved default. Black is the standard appearance, so nothing changes until
