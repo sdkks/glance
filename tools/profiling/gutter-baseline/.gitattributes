@@ -1,0 +1,2 @@
+# Preserve the archived patch bytes, including blank context lines in the diff.
+overlay.patch -text whitespace=-blank-at-eol

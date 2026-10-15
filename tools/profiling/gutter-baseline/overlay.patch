@@ -1,0 +1,1433 @@
+diff --git a/src/animation.rs b/src/animation.rs
+index e531958..1717973 100644
+--- a/src/animation.rs
++++ b/src/animation.rs
+@@ -312,13 +312,17 @@ impl<'a> Stream<'a> {
+     }
+ 
+     fn normalize(&self, RawFrame { rgba, timing }: RawFrame) -> Result<Pixels, LoadError> {
++        let orientation_color = crate::profile::timer("orientation_color");
+         let mut image = image::DynamicImage::ImageRgba8(rgba);
+         image.apply_orientation(self.orientation);
+         let size = [image.width() as usize, image.height() as usize];
+         let mut rgba = image.into_rgba8().into_raw();
+         let warning = crate::color::normalize8(&mut rgba, self.icc.as_deref(), false)
+             .or_else(|| self.warning.clone());
++        drop(orientation_color);
++        let levels_timer = crate::profile::timer("render_levels");
+         let levels = crate::levels::generate(size, &rgba)?;
++        drop(levels_timer);
+         Ok(Pixels {
+             size,
+             rgba,
+@@ -463,6 +467,7 @@ impl Worker {
+         let mut state = self.shared.state.lock().expect("animation lock");
+         if !state.closed {
+             state.serial = state.serial.saturating_add(1);
++            crate::profile::event("request");
+             state.advance = Some((state.serial, target));
+             state.result = None;
+             self.shared.wake.notify_one();
+@@ -595,6 +600,7 @@ fn run(shared: &Shared, version: &crate::folder::FileVersion) -> Result<(), Load
+                 }
+                 continue;
+             }
++            crate::profile::event("wrap");
+             drop(stream);
+             stream = reopen()?;
+             index = 0;
+@@ -626,6 +632,7 @@ fn run(shared: &Shared, version: &crate::folder::FileVersion) -> Result<(), Load
+                 state.lookahead = None;
+             }
+             if state.serial == serial {
++                crate::profile::event("ready");
+                 state.result = Some(Ok(Some(Frame {
+                     pixels,
+                     final_frame,
+diff --git a/src/animation/webp.rs b/src/animation/webp.rs
+index 6aafa8a..5204341 100644
+--- a/src/animation/webp.rs
++++ b/src/animation/webp.rs
+@@ -129,6 +129,7 @@ impl<'a> Native<'a> {
+         dimensions: (u32, u32),
+         preflight: Preflight,
+     ) -> Result<Self, LoadError> {
++        let _timer = crate::profile::timer("native_open");
+         let decoder = webp_animation::Decoder::new(bytes)
+             .map_err(|e| LoadError::Malformed(format!("WebP: {e:?}")))?;
+         if decoder.dimensions() != dimensions {
+@@ -143,7 +144,14 @@ impl<'a> Native<'a> {
+     }
+ 
+     pub fn next(&mut self) -> Result<Option<(RgbaImage, Duration)>, LoadError> {
++        let decode = crate::profile::timer("native_decode_composition_wrapper_copy");
+         let frame = self.frames.next();
++        // EOF probes are not frame decode samples.
++        if frame.is_some() {
++            drop(decode);
++        } else {
++            decode.cancel();
++        }
+         // The wrapper returns None both at EOF and on native decode failure.
+         // Only the independently counted number of ANMF chunks establishes EOF.
+         if self.remaining == 0 {
+@@ -165,8 +173,10 @@ impl<'a> Native<'a> {
+         // The wrapper exposes a slice, not an owned-buffer extraction API. This
+         // transient copy fits the existing compositor reserve; the wrapper frame
+         // is dropped before orientation, color normalization and level generation.
++        let copy = crate::profile::timer("adapter_pixel_copy");
+         let rgba = RgbaImage::from_raw(self.dimensions.0, self.dimensions.1, frame.data().to_vec())
+             .ok_or_else(malformed)?;
++        drop(copy);
+         self.remaining -= 1;
+         self.timestamp = timestamp;
+         Ok(Some((rgba, Duration::from_millis(delay as u64))))
+diff --git a/src/app.rs b/src/app.rs
+index ebe87ba..0d2492e 100644
+--- a/src/app.rs
++++ b/src/app.rs
+@@ -558,6 +558,7 @@ impl Viewer {
+                 &mut self.view,
+             ) && let Some(playback) = &mut self.animation
+             {
++                crate::profile::event("admit");
+                 playback.waiting = false;
+                 playback.displayed_index = playback.candidate_index;
+                 if std::env::var_os("GLANCE_TRACE_ANIMATION").is_some_and(|v| v == "1") {
+@@ -584,6 +585,7 @@ impl Viewer {
+             &mut self.view,
+             &mut self.background_override,
+         ) {
++            crate::profile::event("admit");
+             let bytes = self.displayed_bytes();
+             if let Some(version) = &version {
+                 self.cache.admitted(version, bytes);
+@@ -686,6 +688,9 @@ impl Viewer {
+         let Some(playback) = &mut self.animation else {
+             return;
+         };
++        if crate::profile::enabled() {
++            crate::profile::playback(playback.clock.rate.key(), playback.clock.paused);
++        }
+         let now = playback.origin.elapsed();
+         if (playback.clock.paused || playback.clock.rate == crate::animation::Rate::Off)
+             && !playback.manual
+@@ -709,6 +714,7 @@ impl Viewer {
+                     return;
+                 }
+                 Ok(Some(frame)) => {
++                    crate::profile::event("taken");
+                     let duration = playback.clock.rate.interval(
+                         frame
+                             .pixels
+@@ -1499,6 +1505,17 @@ impl Viewer {
+                     }
+                     let size = candidate_view.transform.size(image.size);
+                     let ppp = ctx.pixels_per_point();
++                    if crate::profile::enabled() {
++                        let viewport = ctx.input(|i| i.viewport().inner_rect).unwrap_or(canvas);
++                        crate::profile::geometry([
++                            viewport.width(),
++                            viewport.height(),
++                            canvas.width(),
++                            canvas.height(),
++                            ppp,
++                            candidate_view.scale(canvas, size, ppp),
++                        ]);
++                    }
+                     let prepared = self
+                         .render_state
+                         .as_ref()
+diff --git a/src/main.rs b/src/main.rs
+index 60a7c6b..2f2557d 100644
+--- a/src/main.rs
++++ b/src/main.rs
+@@ -12,6 +12,7 @@ mod levels;
+ mod loader;
+ #[cfg(any(target_os = "macos", test))]
+ mod open_documents;
++mod profile;
+ mod render;
+ mod settings;
+ mod tiles;
+@@ -45,6 +46,8 @@ fn window_icon() -> egui::IconData {
+ }
+ 
+ fn main() -> eframe::Result {
++    profile::init();
++    let _ = tiles::kernel();
+     let initial_path = std::env::args_os()
+         .nth(1)
+         .and_then(|arg| initial_document(&arg));
+@@ -79,11 +82,13 @@ fn main() -> eframe::Result {
+     open_documents::observe_launch(
+         objc2::MainThreadMarker::new().expect("the application must start on the main thread"),
+     );
+-    eframe::run_native(
++    let result = eframe::run_native(
+         "glance",
+         options,
+         Box::new(move |cc| Ok(Box::new(windows::Application::new(cc, initial_path)))),
+-    )
++    );
++    profile::report();
++    result
+ }
+ 
+ #[cfg(test)]
+diff --git a/src/render.rs b/src/render.rs
+index 5cf3448..ec5ca12 100644
+--- a/src/render.rs
++++ b/src/render.rs
+@@ -1,6 +1,7 @@
+ use crate::{
+     decode::{LoadError, Pixels},
+     levels,
++    profile::{self, elapsed, stamp},
+     settings::Background,
+     tiles::{self, Key},
+     transform::Transform,
+@@ -17,6 +18,7 @@ use std::{
+         atomic::{AtomicBool, Ordering},
+     },
+     task::{Context, Poll, Waker},
++    time::Duration,
+ };
+ use wgpu::util::DeviceExt;
+ 
+@@ -186,10 +188,23 @@ fn checked<T>(
+     device: &wgpu::Device,
+     operation: impl FnOnce() -> Result<T, LoadError>,
+ ) -> Result<T, LoadError> {
++    checked_observed(device, operation, None)
++}
++
++fn checked_observed<T>(
++    device: &wgpu::Device,
++    operation: impl FnOnce() -> Result<T, LoadError>,
++    mut checks: Option<&mut Duration>,
++) -> Result<T, LoadError> {
++    let start = checks.as_ref().and_then(|_| stamp());
+     let oom = device.push_error_scope(wgpu::ErrorFilter::OutOfMemory);
+     let internal = device.push_error_scope(wgpu::ErrorFilter::Internal);
+     let validation = device.push_error_scope(wgpu::ErrorFilter::Validation);
++    if let Some(checks) = checks.as_mut() {
++        **checks += elapsed(start);
++    }
+     let result = operation();
++    let start = checks.as_ref().and_then(|_| stamp());
+     let mut cx = Context::from_waker(Waker::noop());
+     let mut error = None;
+     for scope in [validation, internal, oom] {
+@@ -200,6 +215,9 @@ fn checked<T>(
+             Poll::Pending => error = Some("Device error check did not complete".into()),
+         }
+     }
++    if let Some(checks) = checks {
++        *checks += elapsed(start);
++    }
+     if let Some(error) = error {
+         Err(LoadError::DisplayUnavailable(error))
+     } else {
+@@ -215,6 +233,7 @@ impl Image {
+         pixels: Arc<Pixels>,
+         uploads: Arc<Mutex<Uploads>>,
+     ) -> Result<Arc<Self>, LoadError> {
++        let timer = profile::timer("image_upload_renderer_creation");
+         if pixels.levels.is_empty() {
+             return Err(LoadError::DisplayUnavailable(
+                 "Missing normalized levels".into(),
+@@ -222,102 +241,125 @@ impl Image {
+         }
+         let core = tiles::core(state.device.limits().max_texture_dimension_2d)?;
+         // Scan once for this ready resident, not in the per-frame callback.
++        let alpha_start = stamp();
+         let has_transparency = pixels.has_transparency();
++        let alpha = elapsed(alpha_start);
+         let device = &state.device;
+-        checked(device, || {
+-            let mut entries = vec![wgpu::BindGroupLayoutEntry {
+-                binding: 0,
+-                visibility: wgpu::ShaderStages::VERTEX_FRAGMENT,
+-                ty: wgpu::BindingType::Buffer {
+-                    ty: wgpu::BufferBindingType::Uniform,
+-                    has_dynamic_offset: false,
+-                    min_binding_size: None,
+-                },
+-                count: None,
+-            }];
+-            for binding in [1, 3] {
++        let setup_start = stamp();
++        let mut checks = Duration::ZERO;
++        let result = checked_observed(
++            device,
++            || {
++                let mut entries = vec![wgpu::BindGroupLayoutEntry {
++                    binding: 0,
++                    visibility: wgpu::ShaderStages::VERTEX_FRAGMENT,
++                    ty: wgpu::BindingType::Buffer {
++                        ty: wgpu::BufferBindingType::Uniform,
++                        has_dynamic_offset: false,
++                        min_binding_size: None,
++                    },
++                    count: None,
++                }];
++                for binding in [1, 3] {
++                    entries.push(wgpu::BindGroupLayoutEntry {
++                        binding,
++                        visibility: wgpu::ShaderStages::FRAGMENT,
++                        ty: wgpu::BindingType::Texture {
++                            sample_type: wgpu::TextureSampleType::Float { filterable: true },
++                            view_dimension: wgpu::TextureViewDimension::D2,
++                            multisampled: false,
++                        },
++                        count: None,
++                    });
++                }
+                 entries.push(wgpu::BindGroupLayoutEntry {
+-                    binding,
++                    binding: 2,
+                     visibility: wgpu::ShaderStages::FRAGMENT,
+-                    ty: wgpu::BindingType::Texture {
+-                        sample_type: wgpu::TextureSampleType::Float { filterable: true },
+-                        view_dimension: wgpu::TextureViewDimension::D2,
+-                        multisampled: false,
+-                    },
++                    ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                     count: None,
+                 });
+-            }
+-            entries.push(wgpu::BindGroupLayoutEntry {
+-                binding: 2,
+-                visibility: wgpu::ShaderStages::FRAGMENT,
+-                ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+-                count: None,
+-            });
+-            let layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+-                label: Some("image bindings"),
+-                entries: &entries,
+-            });
+-            let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+-                label: Some("image pipeline layout"),
+-                bind_group_layouts: &[Some(&layout)],
+-                immediate_size: 0,
+-            });
+-            let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+-                label: Some("image shader"),
+-                source: wgpu::ShaderSource::Wgsl(include_str!("image.wgsl").into()),
+-            });
+-            let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+-                label: Some("tiled image pipeline"),
+-                layout: Some(&pipeline_layout),
+-                vertex: wgpu::VertexState {
+-                    module: &shader,
+-                    entry_point: Some("vertex"),
+-                    buffers: &[],
+-                    compilation_options: Default::default(),
+-                },
+-                fragment: Some(wgpu::FragmentState {
+-                    module: &shader,
+-                    entry_point: Some(if state.target_format.is_srgb() {
+-                        "linear"
+-                    } else {
+-                        "encoded"
++                let layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
++                    label: Some("image bindings"),
++                    entries: &entries,
++                });
++                let pipeline_layout =
++                    device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
++                        label: Some("image pipeline layout"),
++                        bind_group_layouts: &[Some(&layout)],
++                        immediate_size: 0,
++                    });
++                let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
++                    label: Some("image shader"),
++                    source: wgpu::ShaderSource::Wgsl(include_str!("image.wgsl").into()),
++                });
++                let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
++                    label: Some("tiled image pipeline"),
++                    layout: Some(&pipeline_layout),
++                    vertex: wgpu::VertexState {
++                        module: &shader,
++                        entry_point: Some("vertex"),
++                        buffers: &[],
++                        compilation_options: Default::default(),
++                    },
++                    fragment: Some(wgpu::FragmentState {
++                        module: &shader,
++                        entry_point: Some(if state.target_format.is_srgb() {
++                            "linear"
++                        } else {
++                            "encoded"
++                        }),
++                        targets: &[Some(wgpu::ColorTargetState {
++                            format: state.target_format,
++                            blend: None,
++                            write_mask: wgpu::ColorWrites::ALL,
++                        })],
++                        compilation_options: Default::default(),
+                     }),
+-                    targets: &[Some(wgpu::ColorTargetState {
+-                        format: state.target_format,
+-                        blend: None,
+-                        write_mask: wgpu::ColorWrites::ALL,
+-                    })],
+-                    compilation_options: Default::default(),
+-                }),
+-                primitive: Default::default(),
+-                depth_stencil: None,
+-                multisample: Default::default(),
+-                multiview_mask: None,
+-                cache: None,
+-            });
+-            let linear = device.create_sampler(&wgpu::SamplerDescriptor {
+-                label: Some("reduction sampler"),
+-                mag_filter: wgpu::FilterMode::Linear,
+-                min_filter: wgpu::FilterMode::Linear,
+-                ..Default::default()
+-            });
+-            let nearest = device.create_sampler(&wgpu::SamplerDescriptor {
+-                label: Some("pixel inspection sampler"),
+-                ..Default::default()
+-            });
+-            Ok(Arc::new(Self {
+-                size: pixels.svg.as_ref().map_or(pixels.size, |svg| svg.size),
+-                pixels,
+-                has_transparency,
+-                pipeline,
+-                layout,
+-                linear,
+-                nearest,
+-                core,
+-                resident: Mutex::new(Residency::default()),
+-                uploads,
+-            }))
+-        })
++                    primitive: Default::default(),
++                    depth_stencil: None,
++                    multisample: Default::default(),
++                    multiview_mask: None,
++                    cache: None,
++                });
++                let linear = device.create_sampler(&wgpu::SamplerDescriptor {
++                    label: Some("reduction sampler"),
++                    mag_filter: wgpu::FilterMode::Linear,
++                    min_filter: wgpu::FilterMode::Linear,
++                    ..Default::default()
++                });
++                let nearest = device.create_sampler(&wgpu::SamplerDescriptor {
++                    label: Some("pixel inspection sampler"),
++                    ..Default::default()
++                });
++                Ok(Arc::new(Self {
++                    size: pixels.svg.as_ref().map_or(pixels.size, |svg| svg.size),
++                    pixels,
++                    has_transparency,
++                    pipeline,
++                    layout,
++                    linear,
++                    nearest,
++                    core,
++                    resident: Mutex::new(Residency::default()),
++                    uploads,
++                }))
++            },
++            Some(&mut checks),
++        );
++        let setup = elapsed(setup_start).saturating_sub(checks);
++        let envelope = timer.finish();
++        profile::breakdown(
++            envelope,
++            &[
++                ("upload_alpha_scan", alpha),
++                ("upload_immutable_setup", setup),
++                ("upload_error_checks", checks),
++            ],
++            "upload_residual",
++            "upload_failed",
++            result.is_err(),
++        );
++        result
+     }
+ 
+     fn stage(
+@@ -355,6 +397,9 @@ impl Image {
+             }
+         }
+         let mut batch = UploadBatch::default();
++        let mut batch_timer = None;
++        let mut costs = [Duration::ZERO; 7];
++        let mut checks = Duration::ZERO;
+         let done = Arc::new(AtomicBool::new(false));
+         let staged = (|| {
+             if !uploads.available(frame) {
+@@ -369,6 +414,7 @@ impl Image {
+                     break;
+                 }
+                 // Claim the viewer-wide slot before any fallible staging work.
++                batch_timer.get_or_insert_with(|| profile::timer("batch_gutter_write_submit_cpu"));
+                 uploads.submitted(frame, Arc::clone(&done));
+                 while cache.tiles.values().map(|t| t.bytes).sum::<usize>() + needed
+                     > tiles::RESIDENT_BYTES
+@@ -381,40 +427,63 @@ impl Image {
+                 }
+                 let level = &self.pixels.levels[key.level];
+                 let tile = tiles::tile(level.size, *key, self.core);
+-                let data = tiles::gutter(level, tile)?;
+-                let texture = checked(&state.device, || {
+-                    let texture = state.device.create_texture(&wgpu::TextureDescriptor {
+-                        label: Some("linear-premultiplied sRGB tile with gutter"),
+-                        size: wgpu::Extent3d {
+-                            width: (tile.size[0] + 2) as u32,
+-                            height: (tile.size[1] + 2) as u32,
+-                            depth_or_array_layers: 1,
+-                        },
+-                        mip_level_count: 1,
+-                        sample_count: 1,
+-                        dimension: wgpu::TextureDimension::D2,
+-                        format: if level.half {
+-                            wgpu::TextureFormat::Rgba16Float
+-                        } else {
+-                            wgpu::TextureFormat::Rgba8UnormSrgb
+-                        },
+-                        usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+-                        view_formats: &[],
+-                    });
+-                    state.queue.write_texture(
+-                        texture.as_image_copy(),
+-                        &data,
+-                        wgpu::TexelCopyBufferLayout {
+-                            offset: 0,
+-                            bytes_per_row: Some(
+-                                (tile.size[0] + 2) as u32 * level.bytes_per_pixel() as u32,
+-                            ),
+-                            rows_per_image: Some((tile.size[1] + 2) as u32),
+-                        },
+-                        texture.size(),
+-                    );
+-                    Ok(texture.create_view(&Default::default()))
+-                })?;
++                let data = if profile::details() {
++                    let start = stamp();
++                    let data = levels::allocation(tile.bytes_at_depth(level.bytes_per_pixel()));
++                    costs[0] += elapsed(start);
++                    let mut data = data?;
++                    let start = stamp();
++                    tiles::fill(level, tile, &mut data, tiles::kernel());
++                    costs[1] += elapsed(start);
++                    data
++                } else {
++                    tiles::gutter(level, tile)?
++                };
++                let texture = checked_observed(
++                    &state.device,
++                    || {
++                        let start = stamp();
++                        let texture = state.device.create_texture(&wgpu::TextureDescriptor {
++                            label: Some("linear-premultiplied sRGB tile with gutter"),
++                            size: wgpu::Extent3d {
++                                width: (tile.size[0] + 2) as u32,
++                                height: (tile.size[1] + 2) as u32,
++                                depth_or_array_layers: 1,
++                            },
++                            mip_level_count: 1,
++                            sample_count: 1,
++                            dimension: wgpu::TextureDimension::D2,
++                            format: if level.half {
++                                wgpu::TextureFormat::Rgba16Float
++                            } else {
++                                wgpu::TextureFormat::Rgba8UnormSrgb
++                            },
++                            usage: wgpu::TextureUsages::TEXTURE_BINDING
++                                | wgpu::TextureUsages::COPY_DST,
++                            view_formats: &[],
++                        });
++                        costs[2] += elapsed(start);
++                        let start = stamp();
++                        state.queue.write_texture(
++                            texture.as_image_copy(),
++                            &data,
++                            wgpu::TexelCopyBufferLayout {
++                                offset: 0,
++                                bytes_per_row: Some(
++                                    (tile.size[0] + 2) as u32 * level.bytes_per_pixel() as u32,
++                                ),
++                                rows_per_image: Some((tile.size[1] + 2) as u32),
++                            },
++                            texture.size(),
++                        );
++                        costs[3] += elapsed(start);
++                        let start = stamp();
++                        let view = texture.create_view(&Default::default());
++                        costs[4] += elapsed(start);
++                        Ok(view)
++                    },
++                    Some(&mut checks),
++                )?;
+                 // The native write has copied the bytes; do not retain CPU
+                 // gutters alongside the rest of the queued batch.
+                 drop(data);
+@@ -430,19 +499,45 @@ impl Image {
+             }
+             Ok(())
+         })();
+-        if batch.bytes > 0 {
++        let outcome = if batch.bytes > 0 {
+             uploads.finish_batch(staged, || {
+-                checked(&state.device, || {
+-                    state.queue.submit([]);
+-                    state.queue.on_submitted_work_done(move || {
+-                        done.store(true, Ordering::Release);
+-                    });
+-                    Ok(())
+-                })
+-            })?;
++                checked_observed(
++                    &state.device,
++                    || {
++                        let start = stamp();
++                        state.queue.submit([]);
++                        costs[5] += elapsed(start);
++                        let start = stamp();
++                        state.queue.on_submitted_work_done(move || {
++                            done.store(true, Ordering::Release);
++                        });
++                        costs[6] += elapsed(start);
++                        Ok(())
++                    },
++                    Some(&mut checks),
++                )
++            })
+         } else {
+-            staged?;
+-        }
++            staged
++        };
++        let envelope = batch_timer.and_then(profile::Timer::finish);
++        profile::breakdown(
++            envelope,
++            &[
++                ("batch_gutter_allocation_zero", costs[0]),
++                ("batch_gutter_fill", costs[1]),
++                ("batch_texture_create", costs[2]),
++                ("batch_native_write", costs[3]),
++                ("batch_view_create", costs[4]),
++                ("batch_submit", costs[5]),
++                ("batch_completion_registration", costs[6]),
++                ("batch_error_checks", checks),
++            ],
++            "batch_residual",
++            "batch_failed",
++            outcome.is_err(),
++        );
++        outcome?;
+         uploads.coverage(frame, visible, |key| {
+             cache
+                 .tiles
+@@ -463,6 +558,7 @@ impl Image {
+         frame: u64,
+         background: Background,
+     ) -> Result<Option<Prepared>, LoadError> {
++        let _timer = profile::timer("image_callback_including_staging_cpu");
+         // View framing remains in intrinsic SVG units; levels are in raster pixels.
+         let physical_scale = if self.pixels.svg.is_some() {
+             physical_scale / self.pixels.svg_scale
+@@ -663,6 +759,7 @@ impl egui_wgpu::CallbackTrait for Paint {
+         pass: &mut wgpu::RenderPass<'static>,
+         _resources: &egui_wgpu::CallbackResources,
+     ) {
++        let _timer = profile::timer("paint_command_encoding_cpu");
+         pass.set_pipeline(&self.image.pipeline);
+         for binding in &self.bindings {
+             pass.set_bind_group(0, binding, &[]);
+diff --git a/src/settings.rs b/src/settings.rs
+index 7c9291c..fca364a 100644
+--- a/src/settings.rs
++++ b/src/settings.rs
+@@ -181,7 +181,6 @@ pub struct Store {
+ }
+ 
+ impl Store {
+-    #[cfg(test)]
+     pub fn session_only() -> Self {
+         Self { path: None }
+     }
+diff --git a/src/tiles.rs b/src/tiles.rs
+index 3547a61..4dcb462 100644
+--- a/src/tiles.rs
++++ b/src/tiles.rs
+@@ -53,9 +53,40 @@ impl Tile {
+     }
+ }
+ 
++#[cfg(test)]
++mod comparison;
++
++#[derive(Clone, Copy, Debug)]
++pub enum Kernel {
++    Scalar,
++    RowSpan,
++}
++
++pub fn kernel() -> Kernel {
++    static KERNEL: std::sync::OnceLock<Kernel> = std::sync::OnceLock::new();
++    *KERNEL.get_or_init(|| match std::env::var("GLANCE_GUTTER_KERNEL").as_deref() {
++        Err(std::env::VarError::NotPresent) | Ok("scalar") => Kernel::Scalar,
++        Ok("row-span") => Kernel::RowSpan,
++        _ => panic!("GLANCE_GUTTER_KERNEL must be scalar or row-span"),
++    })
++}
++
+ pub fn gutter(level: &Level, tile: Tile) -> Result<Vec<u8>, LoadError> {
++    let mut data = allocation(tile.bytes_at_depth(level.bytes_per_pixel()))?;
++    fill(level, tile, &mut data, kernel());
++    Ok(data)
++}
++
++pub fn fill(level: &Level, tile: Tile, data: &mut [u8], kernel: Kernel) {
++    match kernel {
++        Kernel::Scalar => fill_scalar(level, tile, data),
++        Kernel::RowSpan => fill_row_span(level, tile, data),
++    }
++}
++
++// Original scalar loop, retained independently of the span calculation.
++fn fill_scalar(level: &Level, tile: Tile, data: &mut [u8]) {
+     let bpp = level.bytes_per_pixel();
+-    let mut data = allocation(tile.bytes_at_depth(bpp))?;
+     let width = tile.size[0] + 2;
+     for y in 0..tile.size[1] + 2 {
+         let sy = (tile.origin[1] + y)
+@@ -70,7 +101,27 @@ pub fn gutter(level: &Level, tile: Tile) -> Result<Vec<u8>, LoadError> {
+             data[to..to + bpp].copy_from_slice(&level.rgba[from..from + bpp]);
+         }
+     }
+-    Ok(data)
++}
++
++fn fill_row_span(level: &Level, tile: Tile, data: &mut [u8]) {
++    let bpp = level.bytes_per_pixel();
++    let [ox, oy] = tile.origin;
++    let start = ox.saturating_sub(1);
++    let end = (ox + tile.size[0] + 1).min(level.size[0]);
++    let left = usize::from(ox == 0) * bpp;
++    let span = (end - start) * bpp;
++    let row_bytes = (tile.size[0] + 2) * bpp;
++    for (y, row) in data.chunks_exact_mut(row_bytes).enumerate() {
++        let sy = (oy + y).saturating_sub(1).min(level.size[1] - 1);
++        let from = (sy * level.size[0] + start) * bpp;
++        row[left..left + span].copy_from_slice(&level.rgba[from..from + span]);
++        if left != 0 {
++            row[..bpp].copy_from_slice(&level.rgba[from..from + bpp]);
++        }
++        if left + span != row_bytes {
++            row[left + span..].copy_from_slice(&level.rgba[from + span - bpp..from + span]);
++        }
++    }
+ }
+ 
+ pub fn intersection(a: [f32; 4], b: [f32; 4]) -> Option<[f32; 4]> {
+diff --git a/src/windows.rs b/src/windows.rs
+index 792a4d9..b5aad9f 100644
+--- a/src/windows.rs
++++ b/src/windows.rs
+@@ -144,7 +144,14 @@ pub(crate) fn configure_context(ctx: &egui::Context) {
+ impl Application {
+     pub fn new(cc: &eframe::CreationContext<'_>, initial: Option<PathBuf>) -> Self {
+         configure_context(&cc.egui_ctx);
+-        let (settings, store) = crate::settings::Store::load();
++        let (settings, store) = if crate::profile::enabled() {
++            (
++                crate::settings::Settings::default(),
++                crate::settings::Store::session_only(),
++            )
++        } else {
++            crate::settings::Store::load()
++        };
+         #[cfg(target_os = "macos")]
+         let initial = {
+             crate::open_documents::register(
+@@ -231,6 +238,9 @@ impl Application {
+ 
+ impl eframe::App for Application {
+     fn logic(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
++        if crate::profile::expired(ctx) {
++            self.quit = true;
++        }
+         // Raw viewport focus is current even before the next child UI pass.
+         let focused = ctx.input(|input| {
+             input
+diff --git a/src/profile.rs b/src/profile.rs
+new file mode 100644
+index 0000000..736bc0f
+--- /dev/null
++++ b/src/profile.rs
+@@ -0,0 +1,424 @@
++//! Temporary, single-window diagnostic. Disabled runs do not lock or read a clock.
++use std::{
++    collections::BTreeMap,
++    sync::{
++        Mutex, OnceLock,
++        atomic::{AtomicBool, Ordering},
++    },
++    time::{Duration, Instant},
++};
++
++const CAP: usize = 32768;
++static PROFILE: OnceLock<Option<Mutex<Profile>>> = OnceLock::new();
++static STEADY: AtomicBool = AtomicBool::new(false);
++static DETAILS: AtomicBool = AtomicBool::new(false);
++static TIMERS: AtomicBool = AtomicBool::new(true);
++
++pub fn details() -> bool {
++    enabled() && DETAILS.load(Ordering::Relaxed) && TIMERS.load(Ordering::Relaxed)
++}
++pub fn stamp() -> Option<Instant> {
++    details().then(Instant::now)
++}
++pub fn elapsed(start: Option<Instant>) -> Duration {
++    start.map_or(Duration::ZERO, |start| start.elapsed())
++}
++
++// Record local, disjoint leaves only after the envelope has stopped. Residual
++// includes bookkeeping, destruction and clock overhead, not another GPU stage.
++pub fn breakdown(
++    envelope: Option<(bool, Duration)>,
++    parts: &[(&'static str, Duration)],
++    residual: &'static str,
++    failed: &'static str,
++    is_error: bool,
++) {
++    if !details() {
++        return;
++    }
++    let Some((steady, total)) = envelope else {
++        return;
++    };
++    let mut p = state().expect("enabled details").lock().unwrap();
++    for &(name, duration) in parts {
++        p.record(steady, name, duration);
++    }
++    let leaves: Duration = parts.iter().map(|(_, d)| *d).sum();
++    p.record(steady, residual, total.saturating_sub(leaves));
++    if leaves > total {
++        p.record(steady, "attribution_overlap", leaves - total);
++    }
++    if is_error {
++        p.record(steady, failed, total);
++    }
++}
++
++#[derive(Default)]
++struct Samples {
++    values: Vec<f64>,
++    dropped: usize,
++}
++impl Samples {
++    fn push(&mut self, value: f64) {
++        if self.values.len() < CAP {
++            self.values.push(value);
++        } else {
++            self.dropped += 1;
++        }
++    }
++    fn summary(&mut self) -> [f64; 4] {
++        self.values.sort_by(f64::total_cmp);
++        let n = self.values.len();
++        if n == 0 {
++            return [0.0; 4];
++        }
++        let median = (self.values[(n - 1) / 2] + self.values[n / 2]) / 2.0;
++        [
++            self.values.iter().sum::<f64>() / n as f64,
++            median,
++            self.values[(95 * n).div_ceil(100) - 1],
++            self.values[n - 1],
++        ]
++    }
++}
++struct Profile {
++    start: Instant,
++    seconds: u64,
++    auto_stopped: bool,
++    samples: BTreeMap<(bool, &'static str), Samples>,
++    first: Option<Instant>,
++    last: Option<Instant>,
++    request: Option<Instant>,
++    ready: Option<Instant>,
++    taken: Option<Instant>,
++    admissions: usize,
++    wraps: usize,
++    geometry: Option<[f32; 6]>,
++    geometry_changes: usize,
++    playback: Option<(&'static str, bool)>,
++    playback_changes: usize,
++}
++impl Profile {
++    fn record(&mut self, steady: bool, name: &'static str, elapsed: Duration) {
++        self.samples
++            .entry((steady, name))
++            .or_default()
++            .push(elapsed.as_secs_f64() * 1000.0);
++    }
++}
++fn state() -> Option<&'static Mutex<Profile>> {
++    PROFILE.get().and_then(Option::as_ref)
++}
++pub fn enabled() -> bool {
++    state().is_some()
++}
++
++pub fn init() {
++    DETAILS.store(
++        std::env::var("GLANCE_PROFILE_DETAILS").as_deref() != Ok("0"),
++        Ordering::Relaxed,
++    );
++    TIMERS.store(
++        std::env::var("GLANCE_PROFILE_TIMERS").as_deref() != Ok("0"),
++        Ordering::Relaxed,
++    );
++    let seconds = std::env::var("GLANCE_PROFILE_SECONDS").ok().map(|value| {
++        value
++            .parse::<u64>()
++            .ok()
++            .filter(|n| (1..=120).contains(n))
++            .expect("GLANCE_PROFILE_SECONDS must be an integer from 1 through 120")
++    });
++    let _ = PROFILE.set(seconds.map(|seconds| {
++        Mutex::new(Profile {
++            start: Instant::now(),
++            seconds,
++            auto_stopped: false,
++            samples: BTreeMap::new(),
++            first: None,
++            last: None,
++            request: None,
++            ready: None,
++            taken: None,
++            admissions: 0,
++            wraps: 0,
++            geometry: None,
++            geometry_changes: 0,
++            playback: None,
++            playback_changes: 0,
++        })
++    }));
++}
++
++pub struct Timer(Option<(Instant, bool, &'static str)>);
++pub fn timer(name: &'static str) -> Timer {
++    Timer(
++        (enabled() && TIMERS.load(Ordering::Relaxed))
++            .then(|| (Instant::now(), STEADY.load(Ordering::Relaxed), name)),
++    )
++}
++impl Timer {
++    pub fn finish(mut self) -> Option<(bool, Duration)> {
++        self.record()
++    }
++    fn record(&mut self) -> Option<(bool, Duration)> {
++        let (start, steady, name) = self.0.take()?;
++        let elapsed = start.elapsed();
++        state()
++            .expect("enabled timer")
++            .lock()
++            .unwrap()
++            .record(steady, name, elapsed);
++        Some((steady, elapsed))
++    }
++    pub fn cancel(mut self) {
++        self.0 = None;
++    }
++}
++impl Drop for Timer {
++    fn drop(&mut self) {
++        self.record();
++    }
++}
++
++// These events describe one diagnostic window's serial worker/admission pipeline.
++pub fn event(name: &'static str) {
++    let Some(state) = state() else {
++        return;
++    };
++    let now = Instant::now();
++    let mut p = state.lock().unwrap();
++    match name {
++        "request" => {
++            if let Some(last) = p.last {
++                p.record(true, "admit_to_request", now - last);
++            }
++            p.request = Some(now);
++        }
++        "ready" => {
++            if let Some(request) = p.request.take() {
++                p.record(true, "request_to_ready", now - request);
++            }
++            p.ready = Some(now);
++        }
++        "taken" => {
++            if let Some(ready) = p.ready.take() {
++                p.record(true, "ready_to_take", now - ready);
++            }
++            p.taken = Some(now);
++        }
++        "admit" => {
++            if let Some(last) = p.last {
++                p.record(true, "admission_interval", now - last);
++            } else {
++                let start = p.start;
++                p.record(false, "launch_to_first_admission", now - start);
++                p.first = Some(now);
++                STEADY.store(true, Ordering::Relaxed);
++            }
++            if let Some(taken) = p.taken.take() {
++                p.record(true, "take_to_admit", now - taken);
++            }
++            p.last = Some(now);
++            p.admissions += 1;
++        }
++        "wrap" => p.wraps += 1,
++        _ => unreachable!("diagnostic event"),
++    }
++}
++
++pub fn geometry(values: [f32; 6]) {
++    let Some(state) = state() else {
++        return;
++    };
++    let mut p = state.lock().unwrap();
++    if p.geometry.is_some_and(|old| old != values) {
++        p.geometry_changes += 1;
++    }
++    p.geometry = Some(values);
++}
++pub fn playback(rate: &'static str, paused: bool) {
++    let Some(state) = state() else {
++        return;
++    };
++    let mut p = state.lock().unwrap();
++    let value = (rate, paused);
++    if p.playback.is_some_and(|old| old != value) {
++        p.playback_changes += 1;
++    }
++    p.playback = Some(value);
++}
++pub fn expired(ctx: &eframe::egui::Context) -> bool {
++    let Some(state) = state() else {
++        return false;
++    };
++    let mut p = state.lock().unwrap();
++    let remaining = Duration::from_secs(p.seconds).saturating_sub(p.start.elapsed());
++    ctx.request_repaint_after(remaining);
++    p.auto_stopped |= remaining.is_zero();
++    remaining.is_zero()
++}
++pub fn report() {
++    let Some(state) = state() else {
++        return;
++    };
++    let mut p = state.lock().unwrap();
++    eprintln!(
++        "PROFILE elapsed_s={:.6} auto_stopped={}",
++        p.start.elapsed().as_secs_f64(),
++        p.auto_stopped
++    );
++    eprintln!(
++        "PROFILE seconds={} admissions={} wraps={} geometry={:?} geometry_changes={}",
++        p.seconds, p.admissions, p.wraps, p.geometry, p.geometry_changes
++    );
++    eprintln!(
++        "PROFILE playback={:?} playback_changes={}",
++        p.playback, p.playback_changes
++    );
++    eprintln!(
++        "PROFILE geometry: viewport points w,h; canvas points w,h; pixels/point; physical image scale. Default Fit, honor-file rate; session-only defaults."
++    );
++    if let Some((first, last)) = p.first.zip(p.last) {
++        let seconds = (last - first).as_secs_f64();
++        if seconds > 0.0 {
++            eprintln!(
++                "PROFILE admission_span_s={seconds:.6} admissions_per_s={:.4}",
++                (p.admissions - 1) as f64 / seconds
++            );
++        }
++    }
++    eprintln!(
++        "PROFILE gutter={:?} details={} timers={} pending_request={} pending_ready={} pending_taken={}",
++        crate::tiles::kernel(),
++        details(),
++        TIMERS.load(Ordering::Relaxed),
++        p.request.is_some(),
++        p.ready.is_some(),
++        p.taken.is_some()
++    );
++    eprintln!(
++        "PROFILE leaves are nested inside batch/upload/callback envelopes; do not sum envelopes. Phase is envelope start; boundary work can be unmatched. Retained sums exclude dropped samples. Failed batches include partial work/drain."
++    );
++    eprintln!(
++        "PROFILE phase stage n dropped avg_ms median_ms p95_ms worst_ms retained_sum_ms (nearest-rank p95; CPU wall time, NOT GPU/presentation)"
++    );
++    for ((steady, name), samples) in &mut p.samples {
++        let [avg, median, p95, worst] = samples.summary();
++        eprintln!(
++            "PROFILE {} {name} {} {} {avg:.6} {median:.6} {p95:.6} {worst:.6} {:.6}",
++            if *steady { "steady" } else { "startup" },
++            samples.values.len(),
++            samples.dropped,
++            samples.values.iter().sum::<f64>()
++        );
++    }
++}
++
++#[cfg(test)]
++mod tests {
++    use super::*;
++    #[test]
++    fn percentiles_handle_empty_single_odd_even_and_nearest_rank() {
++        let mut s = Samples::default();
++        assert_eq!(s.summary(), [0.0; 4]);
++        s.push(7.0);
++        assert_eq!(s.summary(), [7.0; 4]);
++        s.push(1.0);
++        assert_eq!(s.summary(), [4.0, 4.0, 7.0, 7.0]);
++        s.push(4.0);
++        assert_eq!(s.summary(), [4.0, 4.0, 7.0, 7.0]);
++        let mut s = Samples::default();
++        for n in (1..=100).rev() {
++            s.push(n as f64);
++        }
++        assert_eq!(s.summary(), [50.5, 50.5, 95.0, 100.0]);
++    }
++    #[test]
++    fn collector_is_bounded_and_reports_drops() {
++        let mut s = Samples::default();
++        for _ in 0..CAP + 3 {
++            s.push(1.0);
++        }
++        assert_eq!(s.values.len(), CAP);
++        assert_eq!(s.dropped, 3);
++    }
++    #[test]
++    fn controls_local_breakdown_and_auto_stop_without_a_window() {
++        const CHILD: &str = "GLANCE_PROFILE_TEST_MODE";
++        if let Ok(mode) = std::env::var(CHILD) {
++            init();
++            assert!(enabled());
++            assert_eq!(details(), mode == "full");
++            let measured = timer("finish_once").finish();
++            assert_eq!(measured.is_some(), mode != "events");
++            breakdown(
++                Some((false, Duration::from_millis(10))),
++                &[
++                    ("allocation", Duration::from_millis(3)),
++                    ("fill", Duration::from_millis(2)),
++                ],
++                "residual",
++                "failed",
++                true,
++            );
++            {
++                let mut p = state().unwrap().lock().unwrap();
++                if mode == "full" {
++                    assert_eq!(p.samples[&(false, "allocation")].values, [3.0]);
++                    assert_eq!(p.samples[&(false, "fill")].values, [2.0]);
++                    assert_eq!(p.samples[&(false, "residual")].values, [5.0]);
++                    assert_eq!(p.samples[&(false, "failed")].values, [10.0]);
++                    assert!(!p.samples.contains_key(&(false, "attribution_overlap")));
++                } else {
++                    assert!(!p.samples.contains_key(&(false, "allocation")));
++                }
++                if mode != "events" {
++                    assert_eq!(p.samples[&(false, "finish_once")].values.len(), 1);
++                } else {
++                    assert!(p.samples.is_empty());
++                }
++                p.start = Instant::now() - Duration::from_secs(2);
++            }
++            assert!(expired(&eframe::egui::Context::default()));
++            assert!(state().unwrap().lock().unwrap().auto_stopped);
++            event("request");
++            event("ready");
++            event("taken");
++            event("admit");
++            let p = state().unwrap().lock().unwrap();
++            assert!(p.request.is_none() && p.ready.is_none() && p.taken.is_none());
++            assert_eq!(p.admissions, 1);
++            return;
++        }
++        for (mode, details, timers) in [
++            ("full", "1", "1"),
++            ("outer", "0", "1"),
++            ("events", "1", "0"),
++        ] {
++            let status = std::process::Command::new(std::env::current_exe().unwrap())
++                .args([
++                    "--exact",
++                    "profile::tests::controls_local_breakdown_and_auto_stop_without_a_window",
++                    "--nocapture",
++                ])
++                .env(CHILD, mode)
++                .env("GLANCE_PROFILE_SECONDS", "1")
++                .env("GLANCE_PROFILE_DETAILS", details)
++                .env("GLANCE_PROFILE_TIMERS", timers)
++                .status()
++                .unwrap();
++            assert!(status.success(), "profile mode {mode}");
++        }
++    }
++
++    #[test]
++    fn uninitialized_profile_is_disabled() {
++        assert!(!enabled());
++        assert!(!details());
++        assert!(stamp().is_none());
++        assert!(timer("finished_disabled").finish().is_none());
++        drop(timer("test"));
++        event("admit");
++    }
++}
+diff --git a/src/tiles/comparison.rs b/src/tiles/comparison.rs
+new file mode 100644
+index 0000000..8bde91c
+--- /dev/null
++++ b/src/tiles/comparison.rs
+@@ -0,0 +1,237 @@
++//! Synthetic-only characterization and serial release microcomparison.
++use super::*;
++use std::{
++    hint::black_box,
++    time::{Duration, Instant},
++};
++
++// Frozen a975449 scalar gutter. No span calculation or candidate fill helper.
++fn oracle(level: &Level, tile: Tile) -> Result<Vec<u8>, LoadError> {
++    let bpp = level.bytes_per_pixel();
++    let mut data = allocation(tile.bytes_at_depth(bpp))?;
++    let width = tile.size[0] + 2;
++    for y in 0..tile.size[1] + 2 {
++        let sy = (tile.origin[1] + y)
++            .saturating_sub(1)
++            .min(level.size[1] - 1);
++        for x in 0..width {
++            let sx = (tile.origin[0] + x)
++                .saturating_sub(1)
++                .min(level.size[0] - 1);
++            let from = (sy * level.size[0] + sx) * bpp;
++            let to = (y * width + x) * bpp;
++            data[to..to + bpp].copy_from_slice(&level.rgba[from..from + bpp]);
++        }
++    }
++    Ok(data)
++}
++
++fn synthetic(size: [usize; 2], half: bool, pattern: usize) -> Level {
++    let bpp = if half { 8 } else { 4 };
++    let rgba = (0..size[1])
++        .flat_map(|y| {
++            (0..size[0]).flat_map(move |x| {
++                (0..bpp).map(move |c| {
++                    if pattern == 0 {
++                        (x * 37 + y * 71 + c * 109 + (x >> 8) * 17 + (y >> 8) * 23) as u8
++                    } else {
++                        let mut n = (y * size[0] * bpp + x * bpp + c) as u64;
++                        n = n.wrapping_add(0x9e3779b97f4a7c15);
++                        n = (n ^ (n >> 30)).wrapping_mul(0xbf58476d1ce4e5b9);
++                        n = (n ^ (n >> 27)).wrapping_mul(0x94d049bb133111eb);
++                        (n ^ (n >> 31)) as u8
++                    }
++                })
++            })
++        })
++        .collect();
++    Level { size, rgba, half }
++}
++
++fn check(level: &Level, tile: Tile) {
++    let expected = oracle(level, tile).unwrap();
++    for kernel in [Kernel::Scalar, Kernel::RowSpan] {
++        let mut actual = vec![0xa5; tile.bytes_at_depth(level.bytes_per_pixel())];
++        fill(level, tile, &mut actual, kernel);
++        assert_eq!(actual.len(), expected.len());
++        if let Some(i) = actual.iter().zip(&expected).position(|(a, b)| a != b) {
++            panic!(
++                "byte mismatch: level={:?} half={} tile={tile:?} kernel={kernel:?} byte={i} actual={} expected={}",
++                level.size, level.half, actual[i], expected[i]
++            );
++        }
++    }
++}
++
++#[test]
++fn exact_bytes_small_all_tiles_both_depths_and_patterns() {
++    for half in [false, true] {
++        for pattern in 0..2 {
++            for w in 1..=9 {
++                for h in 1..=9 {
++                    let level = synthetic([w, h], half, pattern);
++                    for core in 1..=5 {
++                        for key in coverage(level.size, 0, core, [0.0, 0.0, 1.0, 1.0]) {
++                            check(&level, tile(level.size, key, core));
++                        }
++                    }
++                }
++            }
++        }
++    }
++}
++
++#[test]
++fn exact_bytes_production_boundaries_and_heavy_geometry() {
++    for half in [false, true] {
++        for pattern in 0..2 {
++            for size in [
++                [1021, 1023],
++                [2045, 1023],
++                [1, 2053],
++                [2053, 1],
++                [1280, 2052],
++                [640, 1026],
++            ] {
++                let level = synthetic(size, half, pattern);
++                for key in coverage(size, 0, 1022, [0.0, 0.0, 1.0, 1.0]) {
++                    check(&level, tile(size, key, 1022));
++                }
++            }
++        }
++    }
++}
++
++#[test]
++fn initialized_allocation_and_capacity_error_remain_fallible() {
++    assert_eq!(allocation(17).unwrap(), [0; 17]);
++    // Capacity overflow is rejected without attempting real OOM.
++    assert!(matches!(
++        allocation(usize::MAX),
++        Err(LoadError::ResourceLimit(_))
++    ));
++}
++
++fn allocated(level: &Level, tile: Tile, kernel: Kernel) -> Vec<u8> {
++    let mut data = allocation(tile.bytes_at_depth(level.bytes_per_pixel())).unwrap();
++    fill(level, tile, &mut data, kernel);
++    data
++}
++
++fn consume(data: &[u8]) {
++    black_box(data);
++    black_box((data[0], data[data.len() / 2], data[data.len() - 1]));
++}
++
++#[test]
++#[ignore = "synthetic serial release timing only; no images or GUI"]
++fn benchmark_gutters() {
++    if cfg!(debug_assertions) {
++        panic!("use --release");
++    }
++    eprintln!(
++        "GUTTER methodology: synthetic 1280x2052; 10 warmups/variant/mode/case; five 200ms wall blocks; alternating order; ns exclude output consumption and drop; no profiling; CPU wall, not GUI/GPU/FPS"
++    );
++    eprintln!(
++        "GUTTER bpp width height ox oy mode block order kernel iterations measured_ns block_wall_ns mean_ns"
++    );
++    for half in [false, true] {
++        let level = synthetic([1280, 2052], half, 1);
++        for (case, key) in [
++            Key {
++                level: 0,
++                x: 0,
++                y: 0,
++            },
++            Key {
++                level: 0,
++                x: 1,
++                y: 0,
++            },
++            Key {
++                level: 0,
++                x: 0,
++                y: 2,
++            },
++            Key {
++                level: 0,
++                x: 1,
++                y: 2,
++            },
++        ]
++        .into_iter()
++        .enumerate()
++        {
++            let tile = tile(level.size, key, 1022);
++            check(&level, tile);
++            for (mode_index, mode) in ["allocation-fill", "fill-only"].into_iter().enumerate() {
++                let mut buffer = allocation(tile.bytes_at_depth(level.bytes_per_pixel())).unwrap();
++                for kernel in [Kernel::Scalar, Kernel::RowSpan] {
++                    for _ in 0..10 {
++                        if mode_index == 0 {
++                            consume(&allocated(
++                                black_box(&level),
++                                black_box(tile),
++                                black_box(kernel),
++                            ));
++                        } else {
++                            fill(
++                                black_box(&level),
++                                black_box(tile),
++                                black_box(&mut buffer),
++                                black_box(kernel),
++                            );
++                            consume(&buffer);
++                        }
++                    }
++                }
++                for block in 0..5 {
++                    let order = if (block + case + mode_index) % 2 == 0 {
++                        [Kernel::Scalar, Kernel::RowSpan]
++                    } else {
++                        [Kernel::RowSpan, Kernel::Scalar]
++                    };
++                    for (position, kernel) in order.into_iter().enumerate() {
++                        let wall = Instant::now();
++                        let mut measured = Duration::ZERO;
++                        let mut iterations = 0u64;
++                        while wall.elapsed() < Duration::from_millis(200) {
++                            let start = Instant::now();
++                            if mode_index == 0 {
++                                let data = allocated(
++                                    black_box(&level),
++                                    black_box(tile),
++                                    black_box(kernel),
++                                );
++                                measured += start.elapsed();
++                                consume(&data);
++                                drop(data);
++                            } else {
++                                fill(
++                                    black_box(&level),
++                                    black_box(tile),
++                                    black_box(&mut buffer),
++                                    black_box(kernel),
++                                );
++                                measured += start.elapsed();
++                                consume(&buffer);
++                            }
++                            iterations += 1;
++                        }
++                        let wall_ns = wall.elapsed().as_nanos();
++                        eprintln!(
++                            "GUTTER {} {} {} {} {} {mode} {block} {position} {kernel:?} {iterations} {} {wall_ns} {:.3}",
++                            level.bytes_per_pixel(),
++                            tile.size[0],
++                            tile.size[1],
++                            tile.origin[0],
++                            tile.origin[1],
++                            measured.as_nanos(),
++                            measured.as_nanos() as f64 / iterations as f64
++                        );
++                    }
++                }
++            }
++        }
++    }
++}
