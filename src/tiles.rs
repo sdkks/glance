@@ -56,18 +56,22 @@ impl Tile {
 pub fn gutter(level: &Level, tile: Tile) -> Result<Vec<u8>, LoadError> {
     let bpp = level.bytes_per_pixel();
     let mut data = allocation(tile.bytes_at_depth(bpp))?;
-    let width = tile.size[0] + 2;
-    for y in 0..tile.size[1] + 2 {
-        let sy = (tile.origin[1] + y)
-            .saturating_sub(1)
-            .min(level.size[1] - 1);
-        for x in 0..width {
-            let sx = (tile.origin[0] + x)
-                .saturating_sub(1)
-                .min(level.size[0] - 1);
-            let from = (sy * level.size[0] + sx) * bpp;
-            let to = (y * width + x) * bpp;
-            data[to..to + bpp].copy_from_slice(&level.rgba[from..from + bpp]);
+    let [ox, oy] = tile.origin;
+    // Include real neighbors in the span; duplicate pixels only at image edges.
+    let start = ox.saturating_sub(1);
+    let end = (ox + tile.size[0] + 1).min(level.size[0]);
+    let left = usize::from(ox == 0) * bpp;
+    let span = (end - start) * bpp;
+    let row_bytes = (tile.size[0] + 2) * bpp;
+    for (y, row) in data.chunks_exact_mut(row_bytes).enumerate() {
+        let sy = (oy + y).saturating_sub(1).min(level.size[1] - 1);
+        let from = (sy * level.size[0] + start) * bpp;
+        row[left..left + span].copy_from_slice(&level.rgba[from..from + span]);
+        if left != 0 {
+            row[..bpp].copy_from_slice(&level.rgba[from..from + bpp]);
+        }
+        if left + span != row_bytes {
+            row[left + span..].copy_from_slice(&level.rgba[from + span - bpp..from + span]);
         }
     }
     Ok(data)
@@ -153,6 +157,9 @@ pub fn eviction(keys: &[(Key, u64)], protected: &[Key]) -> Option<Key> {
         .min_by_key(|(_, age)| age)
         .map(|(key, _)| *key)
 }
+
+#[cfg(test)]
+mod comparison;
 
 #[cfg(test)]
 mod tests {
